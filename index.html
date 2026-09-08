@@ -454,6 +454,26 @@
   </div>
 </div>
 
+<!-- CHANGE POSITION (promotion / rotation) -->
+<div id="posChangeModal" class="adm-gate" hidden>
+  <div class="adm-gate-card" style="width:360px">
+    <div class="adm-gate-icon">🔀</div>
+    <h3>Change Position</h3>
+    <p>Closes out their current position as of the day before the date below, and starts the new one from that date. Their Start Date (hire date) is untouched, and courses shared between the old and new position keep their status automatically.</p>
+    <label style="display:block;font-size:12px;color:var(--ink-muted);margin-bottom:4px;text-align:left">New position</label>
+    <select id="posChangeNewPosition" style="width:100%;margin-bottom:12px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface-2);color:var(--ink)"></select>
+    <label style="display:block;font-size:12px;color:var(--ink-muted);margin-bottom:4px;text-align:left">Effective date (Day 1 in new position)</label>
+    <div id="posChangeDateWrap"></div>
+    <label style="display:block;font-size:12px;color:var(--ink-muted);margin:12px 0 4px;text-align:left">Note (optional)</label>
+    <input type="text" id="posChangeNote" placeholder="e.g. rotated from Oil Analyst" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface-2);color:var(--ink);box-sizing:border-box">
+    <div id="posChangeErr" class="adm-gate-err"></div>
+    <div class="adm-gate-btns">
+      <button class="btn-adm-gate-cancel" id="posChangeCancel">Cancel</button>
+      <button class="btn-adm-unlock" id="posChangeSave">Save</button>
+    </div>
+  </div>
+</div>
+
 
 <script>
 (function(){
@@ -726,13 +746,18 @@
   // field existed). "resigned" is the only other state for now; kept as a string rather than a boolean
   // so it's easy to add e.g. "on_leave" later without a data migration.
   function isActive(person){ return (person.employmentStatus||"active") !== "resigned"; }
+  // The date every schedule/curriculum computation counts from for this person's CURRENT position.
+  // This is their positionEffectiveDate (set at creation, and reset every time Change Position is
+  // used) — NOT their original hire Start Date, which stays fixed as a tenure record and is shown
+  // separately. Falls back to startDate for any record saved before this field existed.
+  function positionRefDate(person){ return person.positionEffectiveDate || person.startDate || ""; }
   function personCore(person){
-    return courseData(person.positionKey, person.startDate).filter(it=>it.phaseKey==="p1"||it.phaseKey==="p2");
+    return courseData(person.positionKey, positionRefDate(person)).filter(it=>it.phaseKey==="p1"||it.phaseKey==="p2");
   }
   function personProgress(person){
     const core = personCore(person);
     const counts = {passed:0, overdue:0, in_progress:0, upcoming:0, on_hold:0, unscheduled:0};
-    core.forEach(it=>{ counts[computeStatus(it, itemState(person,it.id), person.startDate)]++; });
+    core.forEach(it=>{ counts[computeStatus(it, itemState(person,it.id), positionRefDate(person))]++; });
     const total = core.length;
     const pct = total? Math.round(counts.passed/total*100) : 0;
     return Object.assign({total, pct}, counts);
@@ -740,7 +765,7 @@
   function personFull(person){
     // Every course in the person's curriculum, all phases (1, 2 and 4) — unlike personProgress,
     // which intentionally scopes to the probation-critical subset (Phase 1+2) only.
-    const all = courseData(person.positionKey, person.startDate);
+    const all = courseData(person.positionKey, positionRefDate(person));
     const counts = {passed:0, in_progress:0, on_hold:0, not_started:0};
     all.forEach(it=>{
       const ist = itemState(person, it.id);
@@ -780,7 +805,9 @@
     return {
       id, name: p.name, employee_id: p.employeeId||"", position_key: p.positionKey,
       start_date: p.startDate||"", notes: p.notes||"", employment_status: p.employmentStatus||"Active",
-      end_date: p.endDate||"", items: p.items||{}
+      end_date: p.endDate||"", items: p.items||{},
+      position_effective_date: p.positionEffectiveDate || p.startDate || "",
+      position_history: p.positionHistory || []
     };
   }
   async function loadFromSupabase(){
@@ -805,7 +832,9 @@
         STATE.people[r.id] = {
           name: r.name, employeeId: r.employee_id||"", positionKey: r.position_key, startDate: r.start_date||"",
           notes: r.notes||"", employmentStatus: r.employment_status||"Active", endDate: r.end_date||"",
-          items: r.items||{}, createdAt: r.created_at||toISO(new Date())
+          items: r.items||{}, createdAt: r.created_at||toISO(new Date()),
+          positionEffectiveDate: r.position_effective_date || r.start_date || "",
+          positionHistory: r.position_history || []
         };
       });
       const settingsMap = {};
@@ -903,6 +932,75 @@
     closePwdSetModal();
   }
 
+  // ---------- position change (promotion / rotation) ----------
+  function openPosChangeModal(){
+    const person = STATE.people[selectedPersonId];
+    if(!person) return;
+    const sel = document.getElementById("posChangeNewPosition");
+    sel.innerHTML = POSITION_ORDER.map(pk=>`<option value="${pk}" ${pk===person.positionKey?'selected':''}>${esc(POSITIONS[pk].label)}</option>`).join("");
+    const today = toISO(new Date());
+    // Rebuilt fresh each open so it gets the standard invisible-overlay date-picker treatment
+    // (dateEditHtml) and the showPicker()/input-sync wiring below applies to it like any other.
+    document.getElementById("posChangeDateWrap").innerHTML = dateEditHtml('id="posChangeDate"', today);
+    wireDateEditEl(document.getElementById("posChangeDateWrap").querySelector(".date-edit"));
+    document.getElementById("posChangeNote").value = "";
+    document.getElementById("posChangeErr").textContent = "";
+    document.getElementById("posChangeModal").hidden = false;
+  }
+  function closePosChangeModal(){ const el = document.getElementById("posChangeModal"); if(el) el.hidden = true; }
+  // Each position's course rows carry their own id (e.g. "gas-37" vs "oil-27"), even when the same
+  // course CODE (e.g. Lab-01-01-001) appears in both curricula — ids are only literally shared between
+  // positions that share one courseKey (lead_eng <-> senior_eng, both "eng"). So a straight positionKey
+  // switch does NOT by itself carry Passed status across a code that exists in both the old and new
+  // curriculum under different ids. This explicitly copies it over by matching normalized course code,
+  // so credit already earned (e.g. a shared safety/quality-manual course) isn't lost on rotation —
+  // while any course code that's genuinely new to the new position still starts fresh/Not Started.
+  function transferSharedCourseStatus(person, oldPositionKey, newPositionKey, refDateISO){
+    const oldCourseKey = POSITIONS[oldPositionKey].courseKey;
+    const newCourses = courseData(newPositionKey, refDateISO);
+    // Old side includes inactive/retired course rows too, in case a since-deactivated course is what
+    // they were actually passed on.
+    const oldAll = adminCourseRows(oldCourseKey, refDateISO);
+    const oldByCode = {};
+    oldAll.forEach(it=>{ oldByCode[normCode(it.code)] = it; });
+    newCourses.forEach(it=>{
+      const oldIt = oldByCode[normCode(it.code)];
+      if(!oldIt) return;
+      const oldState = person.items && person.items[oldIt.id];
+      if(!oldState || oldState.status!=="Passed") return;
+      const newState = itemState(person, it.id);
+      if(newState.status!=="Passed"){
+        person.items[it.id] = Object.assign({}, oldState);
+      }
+    });
+  }
+  function savePosChange(){
+    const person = STATE.people[selectedPersonId];
+    if(!person) return;
+    const newPositionKey = document.getElementById("posChangeNewPosition").value;
+    const dateEl = document.getElementById("posChangeDate");
+    const effectiveDate = dateEl ? dateEl.value : "";
+    const note = (document.getElementById("posChangeNote").value||"").trim();
+    const errEl = document.getElementById("posChangeErr");
+    if(!effectiveDate){ errEl.textContent = "Pick an effective date."; return; }
+    if(newPositionKey === person.positionKey){ errEl.textContent = "That's already their current position — pick a different one, or Cancel."; return; }
+    if(!person.positionHistory) person.positionHistory = [];
+    const oldPositionKey = person.positionKey;
+    // Close out the outgoing position as its own dated history entry.
+    person.positionHistory.push({
+      positionKey: oldPositionKey,
+      effectiveDate: positionRefDate(person),
+      endDate: effectiveDate,
+      note: note
+    });
+    transferSharedCourseStatus(person, oldPositionKey, newPositionKey, effectiveDate);
+    person.positionKey = newPositionKey;
+    person.positionEffectiveDate = effectiveDate;
+    closePosChangeModal();
+    paint();
+    scheduleSave();
+  }
+
   // ---------- small building blocks ----------
   function ringSVG(pct, size, stroke, color){
     const r=(size-stroke)/2, c=2*Math.PI*r, off=c*(1-pct/100);
@@ -933,9 +1031,9 @@
     Object.entries(STATE.people).filter(([id,p])=>isActive(p)).forEach(([id,p])=>{
       personCore(p).forEach(it=>{
         const ist = itemState(p, it.id);
-        const status = computeStatus(it, ist, p.startDate);
+        const status = computeStatus(it, ist, positionRefDate(p));
         if(status===statusKey){
-          rows.push({ personId:id, personName:p.name, positionKey:p.positionKey, positionLabel:POSITIONS[p.positionKey].label, item:it, target: targetDateStr(it, ist, p.startDate) });
+          rows.push({ personId:id, personName:p.name, positionKey:p.positionKey, positionLabel:POSITIONS[p.positionKey].label, item:it, target: targetDateStr(it, ist, positionRefDate(p)) });
         }
       });
     });
@@ -1428,8 +1526,8 @@
         out.push(`<tr class="phase-divider phase-${item.phaseKey}"><td colspan="${colspan}">${label}</td></tr>`);
       }
       const ist = itemState(person, item.id);
-      const status = computeStatus(item, ist, person.startDate);
-      const target = targetDateStr(item, ist, person.startDate);
+      const status = computeStatus(item, ist, positionRefDate(person));
+      const target = targetDateStr(item, ist, positionRefDate(person));
       out.push(renderScheduleRow(item, ist, status, target, weekCells(item, status, totalWeeks)));
     });
 
@@ -1438,7 +1536,8 @@
       p3.forEach(item=>{
         const ist = itemState(person, item.id);
         const approxWeek = weekMap[item.id] || null;
-        const target = ist.planOverride ? parseISO(ist.planOverride) : (approxWeek && person.startDate ? addDays(person.startDate,(approxWeek-1)*7) : null);
+        const posRef = positionRefDate(person);
+        const target = ist.planOverride ? parseISO(ist.planOverride) : (approxWeek && posRef ? addDays(posRef,(approxWeek-1)*7) : null);
         const status = computeStatusForTarget(ist, target);
         const monthLabel = phase3MonthLabel(meta, approxWeek);
         const bar = `<td class="wk-cell continuing-cell" colspan="${totalWeeks}"><span class="continuing-bar st-${status}" title="Source plan bucket: ${esc(item.postLabel||'—')}">${esc(monthLabel)}</span></td>`;
@@ -1451,8 +1550,8 @@
   function renderPersonView(){
     const person = STATE.people[selectedPersonId];
     if(!person){ view="dashboard"; return renderDashboard(); }
-    const items = courseData(person.positionKey, person.startDate);
-    const meta = courseMeta(person.positionKey, person.startDate);
+    const items = courseData(person.positionKey, positionRefDate(person));
+    const meta = courseMeta(person.positionKey, positionRefDate(person));
     const pr = personProgress(person);
     const full = personFull(person);
     return `
@@ -1474,10 +1573,20 @@
           <input type="text" id="nameInput" value="${esc(person.name||'')}" placeholder="e.g. Nguyen Van A" style="width:180px">
           <label for="empIdInput">Employee ID:</label>
           <input type="text" id="empIdInput" value="${esc(person.employeeId||'')}" placeholder="e.g. 5930-000123" style="width:150px">
-          <label for="startDateInput">Start Date (Day 1):</label>
+          <label for="startDateInput">Start Date (hire date):</label>
           ${dateEditHtml('id="startDateInput"', person.startDate)}
-          <span class="hint">${esc(POSITIONS[person.positionKey].label)} · target date = Start Date + (Week − 1) × 7 days</span>
         </div>
+        <div class="startdate-row" style="border-top:none">
+          <label>Position:</label>
+          ${posPill(person.positionKey, POSITIONS[person.positionKey].label)}
+          <button class="btn small" id="changePositionBtn">Change position</button>
+          <span class="hint">In this role since ${positionRefDate(person)?esc(fmtDate(parseISO(positionRefDate(person)))):'—'} · target date = that date + (Week − 1) × 7 days</span>
+        </div>
+        ${(person.positionHistory && person.positionHistory.length) ? `
+        <div class="startdate-row" style="border-top:none">
+          <label>Position history:</label>
+          <span class="hint">${person.positionHistory.map(h=>`${esc(POSITIONS[h.positionKey]?POSITIONS[h.positionKey].label:h.positionKey)} (${h.effectiveDate?esc(fmtDate(parseISO(h.effectiveDate))):'—'} – ${h.endDate?esc(fmtDate(parseISO(h.endDate))):'—'})${h.note?': '+esc(h.note):''}`).join(' &rarr; ')} &rarr; ${esc(POSITIONS[person.positionKey].label)} (since ${positionRefDate(person)?esc(fmtDate(parseISO(positionRefDate(person)))):'—'})</span>
+        </div>` : ''}
         <div class="startdate-row" style="border-top:none">
           <label for="notesInput">Notes:</label>
           <input type="text" id="notesInput" value="${esc(person.notes||'')}" placeholder="e.g. rotated from Polyolefins, May 2023" style="flex:1;min-width:260px">
@@ -1548,7 +1657,7 @@
     wrap.classList.toggle("view-person", view==="person");
     if(view==="person" && STATE.people[selectedPersonId]){
       const p = STATE.people[selectedPersonId];
-      const meta = courseMeta(p.positionKey, p.startDate);
+      const meta = courseMeta(p.positionKey, positionRefDate(p));
       wrap.style.maxWidth = `min(${personViewWrapWidth(meta)}px, 97vw)`;
     } else {
       wrap.style.maxWidth = "";
@@ -1566,17 +1675,17 @@
     attachHandlers();
   }
 
-  function attachHandlers(){
-    const root = document.getElementById("root");
-
-    // Keep every dateEditHtml() "friendly" label in sync as its underlying (invisible) native date
-    // input is picked — the field-specific handlers below still own committing the value on "change";
-    // this only keeps the visible text from going stale until the next full paint().
-    root.querySelectorAll('.date-edit input[type="date"]').forEach(inp=>{
-      inp.addEventListener("input", ()=>{
-        const friendly = inp.closest(".date-edit").querySelector(".friendly");
-        if(friendly) friendly.textContent = inp.value ? fmtDate(parseISO(inp.value)) : "— pick date —";
-      });
+  // Wires one dateEditHtml() wrapper element with the "friendly" label sync + click-anywhere-opens-
+  // the-picker behavior. Used both for every .date-edit inside #root (re-wired on each paint(), via
+  // attachHandlers() below) and for the Change Position modal's date field, which lives outside
+  // #root and is rebuilt fresh each time the modal opens (see openPosChangeModal()).
+  function wireDateEditEl(wrap){
+    if(!wrap) return;
+    const inp = wrap.querySelector('input[type="date"]');
+    if(!inp) return;
+    inp.addEventListener("input", ()=>{
+      const friendly = wrap.querySelector(".friendly");
+      if(friendly) friendly.textContent = inp.value ? fmtDate(parseISO(inp.value)) : "— pick date —";
     });
     // Real fix for "can't click Start date": relying on the native <input type="date"> to open its
     // own picker only works if the click lands exactly on the tiny calendar-icon hotspot Chrome
@@ -1585,17 +1694,22 @@
     // still being reported after the earlier CSS width fix (that fix only made the hotspot land
     // inside the visible box, not cover the whole box). Explicitly opening the picker via the
     // showPicker() API on click anywhere in the box removes the dependency on that native hotspot.
-    root.querySelectorAll('.date-edit').forEach(wrap=>{
-      const inp = wrap.querySelector('input[type="date"]');
-      if(!inp) return;
-      wrap.addEventListener("click", ()=>{
-        if(typeof inp.showPicker === "function"){
-          try{ inp.showPicker(); }catch(err){ inp.focus(); }
-        } else {
-          inp.focus();
-        }
-      });
+    wrap.addEventListener("click", ()=>{
+      if(typeof inp.showPicker === "function"){
+        try{ inp.showPicker(); }catch(err){ inp.focus(); }
+      } else {
+        inp.focus();
+      }
     });
+  }
+
+  function attachHandlers(){
+    const root = document.getElementById("root");
+
+    // Keep every dateEditHtml() "friendly" label in sync as its underlying (invisible) native date
+    // input is picked — the field-specific handlers below still own committing the value on "change";
+    // this only keeps the visible text from going stale until the next full paint().
+    root.querySelectorAll('.date-edit').forEach(wireDateEditEl);
 
     if(view==="dashboard"){
       const toggleBtn = document.getElementById("toggleAddForm");
@@ -1612,7 +1726,7 @@
         const name = (nameEl.value||"").trim();
         if(!name){ nameEl.focus(); return; }
         const id = newPersonId();
-        STATE.people[id] = { name, employeeId: (empEl.value||"").trim(), positionKey: posEl.value, startDate: dateEl.value||"", notes: (notesEl.value||"").trim(), items:{}, createdAt: toISO(new Date()) };
+        STATE.people[id] = { name, employeeId: (empEl.value||"").trim(), positionKey: posEl.value, startDate: dateEl.value||"", notes: (notesEl.value||"").trim(), items:{}, createdAt: toISO(new Date()), positionEffectiveDate: dateEl.value||"", positionHistory: [] };
         addFormOpen = false;
         scheduleSave();
         paint();
@@ -1839,6 +1953,8 @@
           scheduleSave();
         });
       }
+      const changePositionBtn = document.getElementById("changePositionBtn");
+      if(changePositionBtn) changePositionBtn.addEventListener("click", openPosChangeModal);
       const employmentInput = document.getElementById("employmentInput");
       if(employmentInput){
         employmentInput.addEventListener("change", ()=>{
@@ -1913,6 +2029,10 @@
   if(pwdSetCancelBtn) pwdSetCancelBtn.addEventListener("click", closePwdSetModal);
   const pwdSetSaveBtn = document.getElementById("pwdSetSave");
   if(pwdSetSaveBtn) pwdSetSaveBtn.addEventListener("click", saveAdminPwd);
+  const posChangeCancelBtn = document.getElementById("posChangeCancel");
+  if(posChangeCancelBtn) posChangeCancelBtn.addEventListener("click", closePosChangeModal);
+  const posChangeSaveBtn = document.getElementById("posChangeSave");
+  if(posChangeSaveBtn) posChangeSaveBtn.addEventListener("click", savePosChange);
 
   (async function boot(){
     const ok = await loadFromSupabase();
