@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Olefins Onboarding Tracker</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.1/dist/pptxgen.bundle.js"></script>
 <script src="config.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
@@ -407,6 +408,7 @@
       <div class="subtitle" id="pageSubtitle">Source: CL-D-1000-0001 Functional Training Plan for Olefins (Rev 1.1)</div>
     </div>
     <div class="header-actions">
+      <button class="btn small" id="openExportReport">Export report</button>
       <button class="btn small" id="openAdmin">Manage courses</button>
       <button class="btn small" id="openPwdSet" title="Set or change the admin password">🔒</button>
       <span class="save-chip" id="saveChip" data-state="idle">Connecting…</span>
@@ -470,6 +472,32 @@
     <div class="adm-gate-btns">
       <button class="btn-adm-gate-cancel" id="posChangeCancel">Cancel</button>
       <button class="btn-adm-unlock" id="posChangeSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- EXPORT REPORT (PPTX, 16:9) -->
+<div id="exportReportModal" class="adm-gate" hidden>
+  <div class="adm-gate-card" style="width:380px">
+    <div class="adm-gate-icon">📊</div>
+    <h3>Export Report</h3>
+    <p>Builds a 16:9 PowerPoint covering whichever sections you tick below, using the section's live data as of right now.</p>
+    <label style="display:flex;align-items:center;gap:8px;margin:14px 0;text-align:left;font-size:14px;color:var(--ink)">
+      <input type="checkbox" id="exportScopeOverall" checked style="width:16px;height:16px">
+      Overall results — all active people, by position
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;margin:14px 0;text-align:left;font-size:14px;color:var(--ink)">
+      <input type="checkbox" id="exportScopeNewcomers" style="width:16px;height:16px">
+      Newcomers — active people still completing probation training
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;margin:14px 0;text-align:left;font-size:14px;color:var(--ink)">
+      <input type="checkbox" id="exportScopeRotated" style="width:16px;height:16px">
+      Rotated members — active people with a recorded position change
+    </label>
+    <div id="exportReportErr" class="adm-gate-err"></div>
+    <div class="adm-gate-btns">
+      <button class="btn-adm-gate-cancel" id="exportReportCancel">Cancel</button>
+      <button class="btn-adm-unlock" id="exportReportGenerate">Generate .pptx</button>
     </div>
   </div>
 </div>
@@ -999,6 +1027,227 @@
     closePosChangeModal();
     paint();
     scheduleSave();
+  }
+
+  // ---------- Export Report (PPTX, 16:9) ----------
+  // Client-side PPTX generation via the PptxGenJS browser bundle (loaded from CDN in <head>) — no
+  // server involved, matching the rest of this app's architecture. Design tokens below mirror the
+  // dark navy/teal/amber PptxGenJS template already used for this lab's other decks (Cambria titles,
+  // Tahoma body, 16:9 widescreen), prototyped and visually QA'd (LibreOffice render) before porting.
+  const RPT_COLOR = {
+    navy:"0B1F3A", teal:"0D9488", tealLight:"5EEAD4", amber:"F59E0B", red:"DC2626", green:"16A34A",
+    white:"FFFFFF", ink:"1E293B", muted:"64748B", paper:"F8FAFC", line:"E2E8F0",
+  };
+  const RPT_FONT_TITLE = "Cambria", RPT_FONT_BODY = "Tahoma";
+  function rptDate(iso){ return iso ? fmtDate(parseISO(iso)) : "—"; }
+  function rptStatusColor(status){
+    if(status==="overdue") return RPT_COLOR.red;
+    if(status==="on_track") return RPT_COLOR.green;
+    return RPT_COLOR.amber;
+  }
+  // Derives each active person's report-relevant figures once (probation %/status/overdue count),
+  // shared by every scope builder below rather than recomputing per slide.
+  function rptPersonStats(p){
+    const pr = personProgress(p);
+    const status = pr.overdue>0 ? "overdue" : (pr.pct>=100 ? "complete" : "on_track");
+    return { person:p, pct:pr.pct, overdueCount:pr.overdue, status };
+  }
+  function rptSectionDivider(pres, title, subtitle){
+    const s = pres.addSlide();
+    s.background = { color: RPT_COLOR.navy };
+    s.addShape("rect", { x:0, y:3.15, w:1.4, h:0.09, fill:{color:RPT_COLOR.teal} });
+    s.addText(title, { x:0.7, y:3.3, w:12, h:1, fontFace:RPT_FONT_TITLE, fontSize:36, bold:true, color:RPT_COLOR.white });
+    if(subtitle) s.addText(subtitle, { x:0.7, y:4.15, w:12, h:0.5, fontFace:RPT_FONT_BODY, fontSize:16, color:RPT_COLOR.tealLight });
+  }
+  function rptHeader(s, title, scopeLabel){
+    s.background = { color: RPT_COLOR.white };
+    s.addShape("rect", { x:0, y:0, w:13.33, h:0.9, fill:{color:RPT_COLOR.navy} });
+    s.addText(title, { x:0.45, y:0.12, w:9.5, h:0.66, fontFace:RPT_FONT_TITLE, fontSize:20, bold:true, color:RPT_COLOR.white, valign:"middle" });
+    if(scopeLabel) s.addText(scopeLabel, { x:10.0, y:0.12, w:3.0, h:0.66, fontFace:RPT_FONT_BODY, fontSize:11, color:RPT_COLOR.tealLight, align:"right", valign:"middle" });
+  }
+  function rptFooter(s, pageNote){
+    s.addText("Olefins & UT Analyst Section — Long Son Petrochemicals Central Laboratory", { x:0.45, y:7.15, w:9.0, h:0.3, fontFace:RPT_FONT_BODY, fontSize:9, color:RPT_COLOR.muted });
+    if(pageNote) s.addText(pageNote, { x:10.0, y:7.15, w:2.9, h:0.3, fontFace:RPT_FONT_BODY, fontSize:9, color:RPT_COLOR.muted, align:"right" });
+  }
+  function rptKpiTile(s, x, y, w, h, value, label, accent){
+    s.addShape("rect", { x, y, w, h, fill:{color:RPT_COLOR.paper}, line:{color:RPT_COLOR.line, width:1} });
+    s.addShape("rect", { x, y, w:0.06, h, fill:{color:accent} });
+    s.addText(String(value), { x:x+0.2, y:y+0.12, w:w-0.4, h:h*0.55, fontFace:RPT_FONT_TITLE, fontSize:30, bold:true, color:RPT_COLOR.ink, valign:"bottom" });
+    s.addText(label, { x:x+0.2, y:y+h*0.62, w:w-0.4, h:h*0.35, fontFace:RPT_FONT_BODY, fontSize:11, color:RPT_COLOR.muted, valign:"top" });
+  }
+  function rptKpiSlide(pres, title, scopeLabel, kpis){
+    const s = pres.addSlide();
+    rptHeader(s, title, scopeLabel);
+    const n = kpis.length, gap = 0.3, totalW = 12.43, w = (totalW - gap*(n-1))/n;
+    kpis.forEach((k,i)=>rptKpiTile(s, 0.45+i*(w+gap), 1.5, w, 1.6, k.value, k.label, k.accent||RPT_COLOR.teal));
+    rptFooter(s);
+  }
+  function rptPositionTableSlide(pres, title, scopeLabel, rows){
+    const s = pres.addSlide();
+    rptHeader(s, title, scopeLabel);
+    const header = [
+      { text:"Position", options:{ bold:true, color:RPT_COLOR.white, fill:{color:RPT_COLOR.navy} } },
+      { text:"Headcount", options:{ bold:true, color:RPT_COLOR.white, fill:{color:RPT_COLOR.navy}, align:"center" } },
+      { text:"Avg. Probation %", options:{ bold:true, color:RPT_COLOR.white, fill:{color:RPT_COLOR.navy}, align:"center" } },
+      { text:"Overdue courses", options:{ bold:true, color:RPT_COLOR.white, fill:{color:RPT_COLOR.navy}, align:"center" } },
+    ];
+    const body = rows.map((r,i)=>[
+      { text:r.label, options:{ fill:{color:i%2?RPT_COLOR.paper:RPT_COLOR.white} } },
+      { text:String(r.headcount), options:{ align:"center", fill:{color:i%2?RPT_COLOR.paper:RPT_COLOR.white} } },
+      { text:`${r.avgPct}%`, options:{ align:"center", fill:{color:i%2?RPT_COLOR.paper:RPT_COLOR.white}, color:r.avgPct>=80?RPT_COLOR.green:(r.avgPct>=50?RPT_COLOR.amber:RPT_COLOR.red), bold:true } },
+      { text:String(r.overdue), options:{ align:"center", fill:{color:i%2?RPT_COLOR.paper:RPT_COLOR.white}, color:r.overdue>0?RPT_COLOR.red:RPT_COLOR.muted } },
+    ]);
+    // Row height is capped rather than fixed, so a table with few rows in scope doesn't stretch its
+    // rows to fill a fixed area (looked bloated during visual QA) — see rptRosterTableSlides below.
+    const rowH = 0.55;
+    s.addTable([header, ...body], {
+      x:0.45, y:1.3, w:12.43, h:Math.min(5.5, rowH*(rows.length+1)),
+      fontFace:RPT_FONT_BODY, fontSize:12, border:{type:"solid", color:RPT_COLOR.line, pt:0.75},
+      autoPage:false, colW:[5.5, 2.31, 2.31, 2.31],
+    });
+    rptFooter(s);
+  }
+  // Paginates a person roster table across as many slides as needed (12 rows/slide fits 16:9 with
+  // this row height and font size without overflowing — confirmed via LibreOffice render).
+  function rptRosterTableSlides(pres, title, scopeLabel, columns, rows, rowsPerSlide){
+    rowsPerSlide = rowsPerSlide || 12;
+    const pages = Math.max(1, Math.ceil(rows.length/rowsPerSlide));
+    for(let p=0; p<pages; p++){
+      const s = pres.addSlide();
+      rptHeader(s, title, scopeLabel);
+      const pageRows = rows.slice(p*rowsPerSlide, (p+1)*rowsPerSlide);
+      const header = columns.map(c=>({ text:c.label, options:{ bold:true, color:RPT_COLOR.white, fill:{color:RPT_COLOR.navy}, align:c.align||"left" } }));
+      const body = pageRows.map((r,i)=>columns.map(c=>({
+        text: c.value(r),
+        options: {
+          align: c.align||"left",
+          fill: { color: i%2?RPT_COLOR.paper:RPT_COLOR.white },
+          color: c.color ? c.color(r) : RPT_COLOR.ink,
+          bold: !!(c.bold && c.bold(r)),
+        },
+      })));
+      const rowH = 0.42;
+      s.addTable([header, ...body], {
+        x:0.45, y:1.3, w:12.43, h:Math.min(5.5, rowH*(pageRows.length+1)),
+        fontFace:RPT_FONT_BODY, fontSize:11, border:{type:"solid", color:RPT_COLOR.line, pt:0.5},
+        autoPage:false, colW:columns.map(c=>c.w),
+      });
+      rptFooter(s, pages>1 ? `Page ${p+1} of ${pages}` : null);
+    }
+  }
+
+  function rptBuildOverall(pres, active){
+    rptSectionDivider(pres, "Overall Results", `Olefins & UT Analyst Section — ${active.length} active people`);
+    const stats = active.map(rptPersonStats);
+    const total = stats.length;
+    const overdue = stats.filter(s=>s.status==="overdue").length;
+    const onTrack = stats.filter(s=>s.status!=="overdue").length;
+    const avgPct = Math.round(stats.reduce((s,x)=>s+x.pct,0)/(total||1));
+    rptKpiSlide(pres, "Section Summary", "Overall Results", [
+      { value:total, label:"Active people", accent:RPT_COLOR.teal },
+      { value:`${avgPct}%`, label:"Avg. probation completion", accent:RPT_COLOR.teal },
+      { value:onTrack, label:"On track", accent:RPT_COLOR.green },
+      { value:overdue, label:"Overdue", accent:RPT_COLOR.red },
+    ]);
+    const byPos = POSITION_ORDER.map(pk=>{
+      const mine = stats.filter(s=>s.person.positionKey===pk);
+      const avg = mine.length ? Math.round(mine.reduce((s,x)=>s+x.pct,0)/mine.length) : 0;
+      const od = mine.filter(s=>s.status==="overdue").length;
+      return { label:POSITIONS[pk].label, headcount:mine.length, avgPct:avg, overdue:od };
+    }).filter(r=>r.headcount>0);
+    rptPositionTableSlide(pres, "Progress by Position", "Overall Results", byPos);
+    const sorted = stats.slice().sort((a,b)=>POSITION_ORDER.indexOf(a.person.positionKey)-POSITION_ORDER.indexOf(b.person.positionKey) || (a.person.startDate||"").localeCompare(b.person.startDate||""));
+    rptRosterTableSlides(pres, "Active Roster", "Overall Results", [
+      { label:"Name", value:r=>r.person.name, w:3.0 },
+      { label:"Position", value:r=>POSITIONS[r.person.positionKey].label, w:3.2 },
+      { label:"Start date", value:r=>rptDate(r.person.startDate), w:1.9, align:"center" },
+      { label:"Probation %", value:r=>`${r.pct}%`, w:1.8, align:"center", color:r=>r.pct>=80?RPT_COLOR.green:(r.pct>=50?RPT_COLOR.amber:RPT_COLOR.red), bold:()=>true },
+      { label:"Status", value:r=>r.status==="overdue"?"Overdue":(r.status==="on_track"?"On track":"Complete"), w:2.53, align:"center", color:r=>rptStatusColor(r.status) },
+    ], sorted);
+  }
+
+  function rptBuildNewcomers(pres, active){
+    const newcomers = active.map(rptPersonStats).filter(s=>s.pct<100);
+    rptSectionDivider(pres, "Newcomers", `${newcomers.length} people still completing probation-critical training`);
+    const overdue = newcomers.filter(s=>s.status==="overdue").length;
+    const avgPct = Math.round(newcomers.reduce((s,x)=>s+x.pct,0)/(newcomers.length||1));
+    rptKpiSlide(pres, "Newcomers Summary", "Newcomers", [
+      { value:newcomers.length, label:"Newcomers (in training)", accent:RPT_COLOR.teal },
+      { value:`${avgPct}%`, label:"Avg. probation completion", accent:RPT_COLOR.teal },
+      { value:overdue, label:"Overdue", accent:RPT_COLOR.red },
+    ]);
+    rptRosterTableSlides(pres, "Newcomer Roster", "Newcomers", [
+      { label:"Name", value:r=>r.person.name, w:2.8 },
+      { label:"Position", value:r=>POSITIONS[r.person.positionKey].label, w:3.0 },
+      { label:"Start date", value:r=>rptDate(r.person.startDate), w:1.8, align:"center" },
+      { label:"Probation %", value:r=>`${r.pct}%`, w:1.7, align:"center", color:r=>r.pct>=80?RPT_COLOR.green:(r.pct>=50?RPT_COLOR.amber:RPT_COLOR.red), bold:()=>true },
+      { label:"Overdue courses", value:r=>String(r.overdueCount), w:1.6, align:"center", color:r=>r.overdueCount>0?RPT_COLOR.red:RPT_COLOR.muted },
+      { label:"Status", value:r=>r.status==="overdue"?"Overdue":"On track", w:1.53, align:"center", color:r=>rptStatusColor(r.status) },
+    ], newcomers.sort((a,b)=>(a.person.startDate||"").localeCompare(b.person.startDate||"")));
+  }
+
+  function rptBuildRotated(pres, active){
+    const rotated = active.filter(p=>p.positionHistory && p.positionHistory.length>0);
+    rptSectionDivider(pres, "Rotated Members", `${rotated.length} people with a recorded position change`);
+    rptKpiSlide(pres, "Rotation Summary", "Rotated Members", [
+      { value:rotated.length, label:"People who have rotated", accent:RPT_COLOR.teal },
+    ]);
+    rptRosterTableSlides(pres, "Rotation History", "Rotated Members", [
+      { label:"Name", value:r=>r.name, w:2.6 },
+      { label:"Current position", value:r=>POSITIONS[r.positionKey].label, w:2.9 },
+      { label:"In role since", value:r=>rptDate(positionRefDate(r)), w:1.7, align:"center" },
+      { label:"History", value:r=>r.positionHistory.map(h=>`${(POSITIONS[h.positionKey]&&POSITIONS[h.positionKey].label)||h.positionKey} (${rptDate(h.effectiveDate)}–${rptDate(h.endDate)})`).join("  →  "), w:5.23 },
+    ], rotated.slice().sort((a,b)=>a.name.localeCompare(b.name)));
+  }
+
+  function buildAndDownloadReport(scopes){
+    const pres = new PptxGenJS();
+    pres.defineLayout({ name:"WIDE169", width:13.33, height:7.5 });
+    pres.layout = "WIDE169";
+    const title = pres.addSlide();
+    title.background = { color: RPT_COLOR.navy };
+    title.addShape("rect", { x:0, y:0, w:13.33, h:0.18, fill:{color:RPT_COLOR.teal} });
+    title.addText("Olefins & UT Analyst Section", { x:0.8, y:2.5, w:11.7, h:1.0, fontFace:RPT_FONT_TITLE, fontSize:40, bold:true, color:RPT_COLOR.white });
+    title.addText("Onboarding & Qualification Training Report", { x:0.8, y:3.45, w:11.7, h:0.6, fontFace:RPT_FONT_BODY, fontSize:20, color:RPT_COLOR.tealLight });
+    title.addText(`Long Son Petrochemicals Central Laboratory  •  Generated ${fmtDate(new Date())}`, { x:0.8, y:6.6, w:11.7, h:0.4, fontFace:RPT_FONT_BODY, fontSize:13, color:RPT_COLOR.muted });
+
+    const active = Object.values(STATE.people).filter(isActive);
+    if(scopes.includes("overall")) rptBuildOverall(pres, active);
+    if(scopes.includes("newcomers")) rptBuildNewcomers(pres, active);
+    if(scopes.includes("rotated")) rptBuildRotated(pres, active);
+
+    const dateStamp = toISO(new Date());
+    return pres.writeFile({ fileName:`Olefins-UT-Training-Report-${dateStamp}.pptx` });
+  }
+
+  function openExportReportModal(){
+    document.getElementById("exportReportErr").textContent = "";
+    document.getElementById("exportReportModal").hidden = false;
+  }
+  function closeExportReportModal(){
+    const el = document.getElementById("exportReportModal");
+    if(el) el.hidden = true;
+  }
+  function generateExportReport(){
+    const errEl = document.getElementById("exportReportErr");
+    const scopes = [];
+    if(document.getElementById("exportScopeOverall").checked) scopes.push("overall");
+    if(document.getElementById("exportScopeNewcomers").checked) scopes.push("newcomers");
+    if(document.getElementById("exportScopeRotated").checked) scopes.push("rotated");
+    if(!scopes.length){ errEl.textContent = "Tick at least one section to include."; return; }
+    if(typeof PptxGenJS === "undefined"){ errEl.textContent = "The PowerPoint library didn't load — check your internet connection and try again."; return; }
+    errEl.textContent = "";
+    const btn = document.getElementById("exportReportGenerate");
+    const prevLabel = btn.textContent;
+    btn.textContent = "Generating…";
+    btn.disabled = true;
+    Promise.resolve(buildAndDownloadReport(scopes)).then(()=>{
+      btn.textContent = prevLabel; btn.disabled = false;
+      closeExportReportModal();
+    }).catch(err=>{
+      btn.textContent = prevLabel; btn.disabled = false;
+      errEl.textContent = "Couldn't generate the file: " + (err && err.message ? err.message : String(err));
+    });
   }
 
   // ---------- small building blocks ----------
@@ -2033,6 +2282,12 @@
   if(posChangeCancelBtn) posChangeCancelBtn.addEventListener("click", closePosChangeModal);
   const posChangeSaveBtn = document.getElementById("posChangeSave");
   if(posChangeSaveBtn) posChangeSaveBtn.addEventListener("click", savePosChange);
+  const openExportReportBtn = document.getElementById("openExportReport");
+  if(openExportReportBtn) openExportReportBtn.addEventListener("click", openExportReportModal);
+  const exportReportCancelBtn = document.getElementById("exportReportCancel");
+  if(exportReportCancelBtn) exportReportCancelBtn.addEventListener("click", closeExportReportModal);
+  const exportReportGenerateBtn = document.getElementById("exportReportGenerate");
+  if(exportReportGenerateBtn) exportReportGenerateBtn.addEventListener("click", generateExportReport);
 
   (async function boot(){
     const ok = await loadFromSupabase();

@@ -46,6 +46,29 @@ section:
 - A **Position history** line appears on their page showing every past role and the dates they
   held it.
 
+## Export Report (new)
+
+There's now an **"Export report"** button in the top bar that builds a 16:9 PowerPoint (.pptx)
+straight from the live data in your browser — no server involved, nothing round-trips to Supabase
+beyond the data that's already loaded.
+
+Tick any combination of three sections (all three can go in one file):
+
+- **Overall results** — a section-wide KPI summary, a progress-by-position breakdown table, and
+  the full active roster with each person's probation completion %.
+- **Newcomers** — everyone active who hasn't yet finished their Phase 1+2 (probation-critical)
+  courses, i.e. anyone under 100% complete. This is self-maintaining: once someone finishes their
+  remaining courses they simply drop out of this section on the next export, no manual flag to
+  update.
+- **Rotated members** — everyone active with at least one entry in their Position history (see
+  above) — Oil → Gas, Gas → Oil, promotions, transfers in, or anything else recorded via Change
+  Position — with their full rotation history laid out.
+
+Only resigned people are excluded from every section, same as the rest of the dashboard. The file
+downloads as `Olefins-UT-Training-Report-<date>.pptx`, styled to match the section's navy/teal/amber
+look, and is safe to re-run as often as you like since it always reflects whatever's on screen right
+now.
+
 ## Setting it up on GitHub Pages
 
 ## Where the data lives
