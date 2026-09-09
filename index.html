@@ -620,6 +620,42 @@
   // postLabel, active}}`) and its own creation-time effectiveDate/scope, going through the same
   // revision pipeline as a source-plan course for any edits made after creation.
   function normCode(code){ return String(code||"").replace(/\s*\(\*\)\s*$/,"").trim().toLowerCase(); }
+  // v3.13 — the leading Document/Test Method No. that every topic name starts with (e.g. the
+  // "CL-M-1000-0001" in "CL-M-1000-0001_Quality Manual", or the "HS-K-4000-001" in
+  // "HS-K-4000-001 - Environment Risk Assessment Procedure") — extracted the same way regardless of
+  // whether the real export uses "_" or " - " after it. Matches 3-6 hyphen-separated groups so it
+  // covers both the plain 4-group codes (CL-M-1000-0001) and the longer ones with an extra segment
+  // (CL-W-1000-99-0001).
+  function extractLeadingDocCode(text){
+    const m = String(text||"").trim().match(/^([A-Za-z0-9]+(?:-[A-Za-z0-9]+){2,5})(?=[\s_]|$)/);
+    return m ? m[1] : null;
+  }
+  // v3.13 — per the user: a course/document code is a real, unique identifier (Lab-XX-XX-XXX, and
+  // likewise the CL-T/CL-D/CL-M/HS-K Document or Test Method No. embedded at the start of a topic
+  // name) — it must never refer to two different things. Used to block "Add course" from creating a
+  // second entry that happens to reuse a code already in use elsewhere (either the Lab-code or the
+  // topic's own leading document number), which is exactly how the HS-K-4000-001 mess (three
+  // near-duplicate entries, same code) accumulated. A course legitimately taught to several positions
+  // is still one entry with several "Applies to" boxes checked — that's not a duplicate, so it's
+  // excluded from this set by simply never being compared against itself. Both kinds of code share one
+  // set since they're really the same namespace the user cares about ("these numbers must be unique").
+  function allExistingCourseCodes(excludeCustomId){
+    const set = new Set();
+    COURSE_KEY_ORDER.forEach(ck=>{
+      (COURSE_DATA[ck]||[]).forEach(it=>{
+        set.add(normCode(it.code));
+        const tc = extractLeadingDocCode(it.topic);
+        if(tc) set.add(normCode(tc));
+      });
+    });
+    (STATE.customCourses||[]).forEach(c=>{
+      if(c.id===excludeCustomId) return;
+      set.add(normCode(c.code));
+      const tc = extractLeadingDocCode(c.topic);
+      if(tc) set.add(normCode(tc));
+    });
+    return set;
+  }
   function revisionsFor(code){ return (STATE.courseEdits && STATE.courseEdits[normCode(code)]) || []; }
   // refDateISO = the date to resolve "as of" — a specific person's Start Date, or omitted/undefined to
   // mean "as of today" (the admin panel's own view, and what a brand-new hire starting today would get).
@@ -1014,6 +1050,15 @@
   // methods unless opts.includeUnassigned — sorted by category then Document No.
   function personMethodEntries(person, opts){
     opts = opts || {};
+    // v3.13 — per the user: test-method re-evaluation tracking (CL-D-1000-0010) applies ONLY to the 3
+    // Analyst positions (Gas/Oil/Utility) — see isAnalystPosition. This is the single funnel behind
+    // personMethodSummary, sectionMethodSummary, the People-table Flag column, and the "needing
+    // attention" filter, so gating it here is enough to stop Section Manager/SS/Lead Engineer/Senior
+    // Engineer people from showing a method-overdue warning, without touching any historical data —
+    // some of them have stray `assigned:true` entries in person.methods left over from an Excel import
+    // that (before this fix) applied to every position; those rows are left alone in the database, just
+    // never surfaced here.
+    if(!isAnalystPosition(person.positionKey)) return [];
     const pm = person.methods || {};
     let rows = Object.keys(STATE.methods).map(id=>{
       const m = STATE.methods[id];
@@ -1987,7 +2032,12 @@
     const meta = courseMeta(POSITION_ORDER.find(pk=>POSITIONS[pk].courseKey===adminCourseKey));
     const today = toISO(new Date());
     return `<div class="add-form admin-add-form${adminAddOpen?' open':''}" id="adminAddForm">
-      <div class="field"><label>Code</label><input type="text" id="newCourseCode" placeholder="e.g. Lab-05-16-030" style="width:150px"></div>
+      <div class="field">
+        <label>Code</label>
+        <input type="text" id="newCourseCode" placeholder="e.g. Lab-05-16-030" style="width:150px"
+          title="Every course/document code must be unique across the whole catalog — the same code can only ever refer to one real document. If this course is taught to more than one position, check every position it applies to below in one go rather than creating a second entry with the same code.">
+        <div id="newCourseError" class="admin-error" style="display:none;color:#b91c1c;font-size:11px;max-width:220px;margin-top:2px"></div>
+      </div>
       <div class="field" style="min-width:260px;flex:1"><label>Topic</label><input type="text" id="newCourseTopic" placeholder="Course / document title"></div>
       <div class="field"><label>Type</label>
         <select id="newCourseType">
@@ -2644,7 +2694,7 @@
   function parseMethodsImportWorkbook(wb){
     const result = {
       updated: [], unmatchedPeople: new Set(), unmatchedMethods: new Set(), rows: 0,
-      coursesUpdated: [], unmatchedCourses: new Set(),
+      coursesUpdated: [], unmatchedCourses: new Set(), skippedNonAnalyst: [],
     };
     wb.SheetNames.forEach(sheetName=>{
       const sheet = wb.Sheets[sheetName];
@@ -2688,7 +2738,19 @@
         if(docCell){
           const methodId = Object.keys(STATE.methods).find(id=>id.toLowerCase()===docCell.toLowerCase()) || null;
           if(!methodId) result.unmatchedMethods.add(docCell);
-          else { matchedMethodId = methodId; applyMethodsImportRow(person, methodId, completeISO, retrainISO); result.updated.push({ person: person.name, methodId, completeISO, retrainISO }); }
+          else {
+            // matchedMethodId is still set for non-Analysts below — findCourseByMethodCode (the
+            // Planner/Schedule course match) applies to every position, not just Analysts, per the
+            // comment above it. Only the Re-evaluation record itself (applyMethodsImportRow) is
+            // Analyst-only, per the user: "the re-evaluation is only for Analyst position."
+            matchedMethodId = methodId;
+            if(isAnalystPosition(person.positionKey)){
+              applyMethodsImportRow(person, methodId, completeISO, retrainISO);
+              result.updated.push({ person: person.name, methodId, completeISO, retrainISO });
+            } else {
+              result.skippedNonAnalyst.push({ person: person.name, methodId });
+            }
+          }
         }
         // A row can point at the SAME curriculum course through both the Course-column Lab-code and
         // the Description-column CL-T code (a Test Method (OJT) course's "code" and its topic's
@@ -2727,7 +2789,16 @@
     if(result.unmatchedPeople.size) msg += `\nName(s) in the file not found in the roster (resigned/rotated/promoted people, or a spelling mismatch, both read the same way — check against "Manage test methods"/the People table if unexpected): ${Array.from(result.unmatchedPeople).join(", ")}.`;
     if(result.unmatchedMethods.size) msg += `\nDocument No.(s) not found in the test-method catalog: ${Array.from(result.unmatchedMethods).join(", ")}.`;
     if(result.unmatchedCourses.size) msg += `\nCourse code(s) not found in the matched person's current curriculum (company-wide training this tracker doesn't cover, or a course from a position they've since rotated out of): ${Array.from(result.unmatchedCourses).join(", ")}.`;
-    if(!result.updated.length && !result.coursesUpdated.length && !result.unmatchedPeople.size && !result.unmatchedMethods.size && !result.unmatchedCourses.size) msg += `\nNo "Name:" + CL-T-xxxx-xxxx or Lab-xx-xx-xxx rows were recognized — check the file matches the expected export format.`;
+    // v3.13 — re-evaluation tracking is Analyst-only (see isAnalystPosition); rows matched to a
+    // non-Analyst person still updated their Planner/Schedule course above where applicable, but were
+    // NOT applied to the Re-evaluation record, so surface that here rather than leaving it silent.
+    if(result.skippedNonAnalyst.length){
+      const byNonAnalystPerson = {};
+      result.skippedNonAnalyst.forEach(u=>{ byNonAnalystPerson[u.person] = (byNonAnalystPerson[u.person]||0) + 1; });
+      const naCount = Object.keys(byNonAnalystPerson).length;
+      msg += `\n${result.skippedNonAnalyst.length} test-method record(s) for ${naCount} non-Analyst ${naCount===1?'person':'people'} (${Object.keys(byNonAnalystPerson).join(", ")}) were NOT applied to Re-evaluation, since that tracking only applies to the 3 Analyst positions (Gas/Oil/Utility).`;
+    }
+    if(!result.updated.length && !result.coursesUpdated.length && !result.unmatchedPeople.size && !result.unmatchedMethods.size && !result.unmatchedCourses.size && !result.skippedNonAnalyst.length) msg += `\nNo "Name:" + CL-T-xxxx-xxxx or Lab-xx-xx-xxx rows were recognized — check the file matches the expected export format.`;
     return msg;
   }
   function handleMethodsImportFile(file){
@@ -2997,12 +3068,33 @@
         const topic = (topicEl.value||"").trim();
         const phaseKey = phaseEl.value;
         const postLabel = phaseKey==="p4" ? (bucketEl.value||"").trim() : "";
+        const errEl = document.getElementById("newCourseError");
+        if(errEl){ errEl.style.display = "none"; errEl.textContent = ""; }
         // v3.11 — a Phase 3 course saved with no Bucket label never gets included in that curriculum's
         // postLabels, so phase3ApproxWeeks never assigns it a due date — it would sit "Not Started"
         // forever without ever going overdue anywhere, exactly the failure this whole fix addresses.
         // Catch it here instead of letting it happen silently, the same way Code/Topic are already caught.
         if(!codeRaw || !topic || appliesTo.length===0 || (phaseKey==="p4" && !postLabel)){
           (codeRaw?(topic?(appliesTo.length===0?null:bucketEl):topicEl):codeEl)?.focus();
+          return;
+        }
+        // v3.13 — per the user: a course code, and likewise the Document/Test Method No. embedded at
+        // the start of the topic name, is a unique real-world identifier and must never be reused for
+        // a different course. Blocks the exact mistake that produced three near-duplicate
+        // HS-K-4000-001 entries — a course meant for several positions is one "Add course" with every
+        // position's box checked in the "Applies to" list below, not several separate saves.
+        const existingCodes = allExistingCourseCodes();
+        const topicCode = extractLeadingDocCode(topic);
+        const dupCode = existingCodes.has(normCode(codeRaw));
+        const dupTopic = !dupCode && topicCode && existingCodes.has(normCode(topicCode));
+        if(dupCode || dupTopic){
+          if(errEl){
+            errEl.textContent = dupCode
+              ? `"${codeRaw}" is already used by an existing course — codes must be unique. If this is the same course for another position, cancel and check every position it applies to in the "Applies to" list below, in this one Add-course action, instead of creating a second entry with the same code.`
+              : `"${topicCode}" — the Document/Test Method No. at the start of the topic name — is already used by an existing course, and these numbers must be unique too. If this is the same document for another position, cancel and check every position it applies to in the "Applies to" list below, in this one Add-course action, instead of creating a second entry.`;
+            errEl.style.display = "block";
+          }
+          codeEl?.focus();
           return;
         }
         const hours = Math.max(0, Number(hoursEl.value)||0);
@@ -3130,7 +3222,12 @@
         const id = (idEl.value||"").trim();
         const name = (nameEl.value||"").trim();
         if(!id || !name){ (id?nameEl:idEl).focus(); return; }
-        if(STATE.methods[id]){ alert("That Document No. already exists."); return; }
+        // v3.13 — case-insensitive, matching how the rest of the app compares Document Nos. (Excel
+        // import, findCourseByMethodCode, etc. all lowercase first) — an exact-case-only lookup here
+        // would let e.g. "cl-t-2000-0001" slip past an existing "CL-T-2000-0001" as if it were new.
+        const idNorm = id.toLowerCase();
+        const dupId = Object.keys(STATE.methods).find(k=>k.toLowerCase()===idNorm);
+        if(dupId){ alert(`Document No. "${dupId}" already exists — Document Nos. must be unique (case-insensitive).`); return; }
         STATE.methods[id] = { id, name, classroom:true, training_type:null, freq_years: freqEl.value===""?null:Number(freqEl.value), reeval_type:null, remarks:"", active:true };
         methodsAdminAddOpen = false;
         scheduleSave();

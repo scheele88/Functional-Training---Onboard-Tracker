@@ -19,7 +19,7 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.12) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
+  (v3.13) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
   "Export Report", **"Test Methods — Competency & Re-evaluation Tracking (v3.6)"**, **"Re-evaluation
   tab, editable dates & Excel import (new, v3.7)"**, **"Test methods now scope to your current
   position, and Excel import now updates the Planner/Schedule tab too (v3.8)"**, **"Test-method
@@ -27,8 +27,10 @@ all. This version saves every change straight to a shared database, so:
   Flag/Methods columns are merged (v3.9)"**, **"Test-method relevance now also excludes
   Polyolefins-section methods entirely (v3.10)"**, **"Phase 3 (Continuing Plan) courses now
   compute overdue status correctly, and the admin panel guards against adding one with no due date
-  (v3.11)"**, and **"Removing a custom course now removes it everywhere it applies, and the
-  Progress-basis choice now survives a reload (v3.12)"** below for what's new.
+  (v3.11)"**, **"Removing a custom course now removes it everywhere it applies, and the
+  Progress-basis choice now survives a reload (v3.12)"**, and **"Course/document codes are now
+  enforced unique, and test-method re-evaluation warnings are now truly Analyst-only (v3.13)"**
+  below for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -444,6 +446,39 @@ real recorded "Passed" statuses — the other two were still "Not Started" every
 lost). That one entry now correctly covers all 6 positions, including SM. You shouldn't see the
 duplicate rows on anyone's Planner/Schedule tab any more — a hard refresh will confirm it.
 
+## Course/document codes are now enforced unique, and test-method re-evaluation warnings are now truly Analyst-only (v3.13)
+
+Two more follow-ups, both preventive/correctness fixes:
+
+**1. Course and document codes are now enforced unique.** You pointed out that a training code (e.g.
+`Lab-01-01-001`) and a Document/Test Method No. (e.g. `CL-T-2000-0001`, `CL-M-1000-0001`) should never
+be reused for two different things — exactly the kind of mistake that produced the three near-duplicate
+`HS-K-4000-001` entries fixed in v3.12. **"+ Add supplemental course" now checks both** the code you
+type and the Document/Test Method No. embedded at the start of the Topic you type, against every course
+already in the base curriculum and every custom course already added. If either one is already in use,
+the save is blocked with an inline message naming the exact code and pointing you at the right fix: if
+the course applies to another position too, cancel and check every position it belongs to in the
+"Applies to" list in that same "Add course" action, rather than adding it a second time. (The v3.12 fix
+already means Remove now cleans up every position in one click, so if you ever do need to redo an entry,
+deleting and re-adding it correctly is safe.) The same case-insensitive uniqueness check was also added
+to "+ Add custom method" in Manage Test Methods, which previously only checked for an exact-case match.
+
+**2. Test-method re-evaluation warnings are now truly Analyst-only.** As agreed, re-evaluation tracking
+(Doc. CL-D-1000-0010) only applies to the 3 Analyst positions (Gas/Oil/Utility) — QC Section Manager, QC
+Supervisor (SS), QC Lead Engineer, and QC Senior Engineer never carry this requirement. Your screenshot
+showed several of these higher-level people still triggering a "N methods overdue" warning on the Flag
+column, even though their own Re-evaluation tab was correctly hidden. The root cause: the Flag column
+and the dashboard's "Test methods needing attention" tile computed method status straight from each
+person's raw records, without checking position — while historical Excel imports had, for some people in
+these roles, quietly created method records that a stray import row happened to match against. **The
+Flag column, the dashboard tile, and the "needing attention" filter now all correctly ignore test-method
+data entirely for non-Analyst positions.** I did not delete any of the underlying historical records —
+they're simply no longer counted for anyone outside Gas/Oil/Utility, so nothing needed to change in the
+database itself. A future Excel import will also no longer write new re-evaluation records for a
+non-Analyst person matched in the file; the import summary banner will say how many rows were skipped
+for that reason (their Planner/Schedule course entries, which aren't Analyst-only, are still updated as
+before).
+
 ## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
 This is the same page as everything above — I originally built this as a separate app and separate
@@ -613,7 +648,18 @@ Planner/Schedule tab correctly showing "OVERDUE," the column header in the scree
 the page had reset to the default scope, which traced to the Progress-basis dropdown never persisting
 its value — fixed by saving it to `localStorage` on change and reading it back (guarded, so a browser
 that blocks storage just falls back to the old always-reset behavior) — the full pre-existing suite
-(v3.9, v3.10, v3.11 included) was re-run afterward and confirmed to still pass. However, this
+(v3.9, v3.10, v3.11 included) was re-run afterward and confirmed to still pass; and new for v3.13 —
+attempting to add a course reusing a real base-curriculum Lab-code is correctly blocked with an inline
+error naming that code, a second attempt reusing an existing topic-embedded Document No. under a
+brand-new Lab-code is also correctly blocked, a genuinely unique code and topic still saves normally,
+and adding a custom test method whose Document No. differs from an existing one only by letter case is
+correctly rejected as a duplicate; and for the Analyst-only fix — three mocked non-Analyst people (SS,
+Lead Engineer, Senior Engineer), each carrying the same long-overdue test-method record a stray import
+had left in their data, now correctly show no method-related warning on the Flag column, are correctly
+excluded from the dashboard's "Test methods needing attention" tile and its click-to-filter list, while
+a mocked Analyst (Gas) with the identical underlying data still correctly shows the warning — confirming
+the fix is scoped by position, not by deleting or altering any of the underlying records. The full
+pre-existing suite (v3.9–v3.12 included) was re-run afterward and confirmed to still pass. However, this
 sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
