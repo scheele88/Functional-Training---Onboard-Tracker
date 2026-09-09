@@ -414,7 +414,7 @@
       <div class="subtitle" id="pageSubtitle">Source: CL-D-1000-0001 Functional Training Plan for Olefins (Rev 1.1)</div>
     </div>
     <div class="header-actions">
-      <select id="progressScopeSelect" title="Which courses count toward every completion % section-wide — dashboard, People table, and Export Report">
+      <select id="progressScopeSelect" title="Which courses count toward every completion %, Progress column, and overdue Flag section-wide — dashboard tiles, People table, and Export Report. 'Probation progress (Ph.1+2)' — the default — never counts Phase 3 (Continuing Plan) courses, so a Phase-3 course (base or newly added) will never show as overdue here until you switch to 'Full progress (all phases)'.">
         <option value="probation">Probation progress (Ph.1+2)</option>
         <option value="full">Full progress (all phases)</option>
         <option value="test">Test methods only</option>
@@ -777,15 +777,28 @@
   function today0(){ const t=new Date(); t.setHours(0,0,0,0); return t; }
   function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
-  function targetDateStr(item, ist, startDateStr){
+  // v3.11 — Phase 3 ("Continuing Plan") items never carry a real `week` value (COURSE_DATA always
+  // stores 0 for them, base or custom — their pacing is computed dynamically, not fixed like Phase
+  // 1/2's). Only renderGanttRows (the person's own Schedule tab) ever resolved that correctly, via
+  // phase3ApproxWeeks' postLabel-bucket pacing; every OTHER consumer of targetDateStr/computeStatus
+  // (personProgressScoped, sectionCourseRows — i.e. the dashboard tiles, People-table Progress/Flag
+  // columns, and Export Report, whenever "Full progress (all phases)" scope is selected) fell back to
+  // `(0-1)*7 = -7 days before start`, a bogus always-in-the-past date that ignored the item's actual
+  // bucket pacing entirely. Passing the SAME phase3WeekMap (see phase3WeekMapFor) into every caller
+  // makes every one of them agree with the person's own page.
+  function targetDateStr(item, ist, startDateStr, phase3WeekMap){
     // Manual per-course reschedule takes precedence over the computed plan date.
     if(ist && ist.planOverride) return parseISO(ist.planOverride);
+    if(item.phaseKey==="p4"){
+      const approxWeek = phase3WeekMap ? (phase3WeekMap[item.id]||null) : null;
+      return (approxWeek && startDateStr) ? addDays(startDateStr,(approxWeek-1)*7) : null;
+    }
     return startDateStr ? addDays(startDateStr,(item.week-1)*7) : null;
   }
-  function computeStatus(item, ist, startDateStr){
+  function computeStatus(item, ist, startDateStr, phase3WeekMap){
     if(ist.status==="Passed") return "passed";
     if(ist.status==="On Hold") return "on_hold";
-    const target = targetDateStr(item, ist, startDateStr);
+    const target = targetDateStr(item, ist, startDateStr, phase3WeekMap);
     if(!target) return "unscheduled";
     if(target < today0()) return "overdue";
     if(ist.status==="In Progress") return "in_progress";
@@ -823,10 +836,18 @@
     return all.filter(it=>it.phaseKey==="p1"||it.phaseKey==="p2");
   }
   function personCore(person){ return personCourseSet(person, "probation"); }
+  // Resolves EVERY Phase-3 item's week the same way the person's own Schedule tab does (see
+  // phase3ApproxWeeks, defined below with the rest of the Gantt-rendering code) — shared by every
+  // aggregate-side consumer of computeStatus/targetDateStr so a Phase-3 course paces identically
+  // whether you're looking at one person's page or the section-wide dashboard/People table.
+  function phase3WeekMapFor(positionKey, refDateISO){
+    return phase3ApproxWeeks(courseMeta(positionKey, refDateISO), courseData(positionKey, refDateISO));
+  }
   function personProgressScoped(person, scope){
     const core = personCourseSet(person, scope);
     const counts = {passed:0, overdue:0, in_progress:0, upcoming:0, on_hold:0, unscheduled:0};
-    core.forEach(it=>{ counts[computeStatus(it, itemState(person,it.id), positionRefDate(person))]++; });
+    const phase3WeekMap = phase3WeekMapFor(person.positionKey, positionRefDate(person));
+    core.forEach(it=>{ counts[computeStatus(it, itemState(person,it.id), positionRefDate(person), phase3WeekMap)]++; });
     const total = core.length;
     const pct = total? Math.round(counts.passed/total*100) : 0;
     return Object.assign({total, pct}, counts);
@@ -1686,11 +1707,12 @@
   function sectionCourseRows(statusKey){
     const rows = [];
     Object.entries(STATE.people).filter(([id,p])=>isActive(p)).forEach(([id,p])=>{
+      const phase3WeekMap = phase3WeekMapFor(p.positionKey, positionRefDate(p));
       personCourseSet(p, progressScope).forEach(it=>{
         const ist = itemState(p, it.id);
-        const status = computeStatus(it, ist, positionRefDate(p));
+        const status = computeStatus(it, ist, positionRefDate(p), phase3WeekMap);
         if(status===statusKey){
-          rows.push({ personId:id, personName:p.name, positionKey:p.positionKey, positionLabel:POSITIONS[p.positionKey].label, item:it, target: targetDateStr(it, ist, positionRefDate(p)) });
+          rows.push({ personId:id, personName:p.name, positionKey:p.positionKey, positionLabel:POSITIONS[p.positionKey].label, item:it, target: targetDateStr(it, ist, positionRefDate(p), phase3WeekMap) });
         }
       });
     });
@@ -1911,7 +1933,7 @@
   // ---------- Admin: manage courses ----------
   function adminPhaseWeekCol(it){
     if(it.phaseKey==="p4"){
-      return `<input type="text" class="admin-input" data-admin-field="postLabel" value="${esc(it.postLabel||'')}" placeholder="e.g. Month 17-19" style="width:120px">`;
+      return `<input type="text" class="admin-input" data-admin-field="postLabel" value="${esc(it.postLabel||'')}" placeholder="e.g. Month 17-19" style="width:120px" title="A Phase 3 course with no Bucket label never gets a due date and can never show as overdue — leaving this blank effectively turns off tracking for this course.">`;
     }
     return `<input type="number" class="admin-input" data-admin-field="week" min="1" max="60" step="1" value="${Number(it.week)||1}" style="width:62px">`;
   }
@@ -1965,7 +1987,13 @@
         </select>
       </div>
       <div class="field"><label>Week (Ph.1/2 only)</label><input type="number" id="newCourseWeek" min="1" max="60" step="1" value="${(meta.weeksP2||0)+1}" style="width:70px"></div>
-      <div class="field"><label>Bucket (Ph.3 only)</label><input type="text" id="newCourseBucket" placeholder="e.g. Month 17-19" style="width:130px"></div>
+      <div class="field">
+        <label>Bucket (Ph.3 only)</label>
+        <input type="text" id="newCourseBucket" placeholder="e.g. ${esc((meta.postLabels&&meta.postLabels[0])||'Month 17-19')}" style="width:130px" list="newCourseBucketList"
+          title="Phase 3 courses are paced automatically (~6 months post-probation, split evenly across every distinct bucket label in use for this curriculum) — required for a Phase 3 course, or it will never get a due date and can never show as overdue anywhere. Reuse an existing label below when this course belongs alongside those courses; a brand-new label is fine too, but it adds a new time slice, which shortens every other bucket's share of the 6 months.">
+        <datalist id="newCourseBucketList">${(meta.postLabels||[]).map(l=>`<option value="${esc(l)}">`).join("")}</datalist>
+        ${meta.postLabels&&meta.postLabels.length ? `<div class="hint" style="font-size:11px;max-width:220px">Existing buckets for this curriculum: ${meta.postLabels.map(esc).join(", ")}. Phase 3 courses only count toward the dashboard/People-table overdue Flag when "Full progress (all phases)" is selected up top.</div>` : ""}
+      </div>
       <div class="field" style="min-width:260px">
         <label>Applies to</label>
         <div class="admin-applies-to">
@@ -2259,8 +2287,8 @@
         out.push(`<tr class="phase-divider phase-${item.phaseKey}"><td colspan="${colspan}">${label}</td></tr>`);
       }
       const ist = itemState(person, item.id);
-      const status = computeStatus(item, ist, positionRefDate(person));
-      const target = targetDateStr(item, ist, positionRefDate(person));
+      const status = computeStatus(item, ist, positionRefDate(person), weekMap);
+      const target = targetDateStr(item, ist, positionRefDate(person), weekMap);
       out.push(renderScheduleRow(item, ist, status, target, weekCells(item, status, totalWeeks)));
     });
 
@@ -2939,15 +2967,19 @@
         const appliesTo = Array.from(root.querySelectorAll(".newCourseApplies:checked")).map(c=>c.value);
         const codeRaw = (codeEl.value||"").trim();
         const topic = (topicEl.value||"").trim();
-        if(!codeRaw || !topic || appliesTo.length===0){
-          (codeRaw?(topic?null:topicEl):codeEl)?.focus();
+        const phaseKey = phaseEl.value;
+        const postLabel = phaseKey==="p4" ? (bucketEl.value||"").trim() : "";
+        // v3.11 — a Phase 3 course saved with no Bucket label never gets included in that curriculum's
+        // postLabels, so phase3ApproxWeeks never assigns it a due date — it would sit "Not Started"
+        // forever without ever going overdue anywhere, exactly the failure this whole fix addresses.
+        // Catch it here instead of letting it happen silently, the same way Code/Topic are already caught.
+        if(!codeRaw || !topic || appliesTo.length===0 || (phaseKey==="p4" && !postLabel)){
+          (codeRaw?(topic?(appliesTo.length===0?null:bucketEl):topicEl):codeEl)?.focus();
           return;
         }
-        const phaseKey = phaseEl.value;
         const hours = Math.max(0, Number(hoursEl.value)||0);
         const code = phaseKey==="p2" ? codeRaw.replace(/\s*\(\*\)\s*$/,"")+" (*)" : codeRaw.replace(/\s*\(\*\)\s*$/,"");
         const week = phaseKey==="p4" ? 0 : Math.max(1, Number(weekEl.value)||1);
-        const postLabel = phaseKey==="p4" ? (bucketEl.value||"").trim() : "";
         const id = "custom-" + Date.now().toString(36) + Math.floor(Math.random()*1000);
         const no = 9000 + (STATE.customCourses||[]).length;
         const positions = {};

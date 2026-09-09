@@ -19,13 +19,15 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.10) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
+  (v3.11) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
   "Export Report", **"Test Methods — Competency & Re-evaluation Tracking (v3.6)"**, **"Re-evaluation
   tab, editable dates & Excel import (new, v3.7)"**, **"Test methods now scope to your current
   position, and Excel import now updates the Planner/Schedule tab too (v3.8)"**, **"Test-method
   relevance now uses your real curriculum data, Excel import now matches on either column, and the
-  Flag/Methods columns are merged (v3.9)"**, and **"Test-method relevance now also excludes
-  Polyolefins-section methods entirely (v3.10)"** below for what's new.
+  Flag/Methods columns are merged (v3.9)"**, **"Test-method relevance now also excludes
+  Polyolefins-section methods entirely (v3.10)"**, and **"Phase 3 (Continuing Plan) courses now
+  compute overdue status correctly, and the admin panel guards against adding one with no due date
+  (v3.11)"** below for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -346,6 +348,59 @@ required for current position (not an Olefins-section method — belongs to anot
 Polyolefins)" when it isn't part of any Olefins curriculum at all (vs. naming the specific Olefins
 position it belongs to, when it is).
 
+## Phase 3 (Continuing Plan) courses now compute overdue status correctly, and the admin panel guards against adding one with no due date (v3.11)
+
+You reported: you added a new course, `HS-K-4000-001`, and applied it to every position. It correctly
+appeared on each person's own Planner/Schedule tab as "Not Started" — but on the main dashboard/People
+table, it never warned anyone as overdue. You asked me to check it and put a preventive measure in
+place for future course additions.
+
+There were two separate things going on, and I want to be upfront about which one is a bug and which
+one is working as designed:
+
+**Working as designed:** the Progress-basis dropdown at the top of the dashboard defaults to
+"Probation progress (Ph.1+2)" — Phase 1 and 2 only. Phase 3 ("Continuing Plan") courses — the ones
+paced over the ~6 months after probation ends — have never counted toward the Progress %, the
+People-table Flag column, or the dashboard tiles while that's selected. This isn't specific to your
+new course; it's true of every existing Phase 3 course in every curriculum, and always has been. To
+see Phase 3 courses (including this one) reflected in those figures, switch the dropdown to "Full
+progress (all phases)".
+
+**An actual bug, which I fixed:** even after switching to "Full progress (all phases)", Phase 3
+courses still wouldn't compute a correct overdue date on the dashboard/People table. Your own
+Planner/Schedule tab has always paced Phase 3 courses correctly — spreading them across ~6 months
+post-probation based on their "Bucket" label (e.g. "Month 4-6"). But the dashboard-level calculation
+(the one behind Progress %, the Flag column, and the Export Report) used a different, older code path
+that read each course's raw `week` field instead — and every Phase 3 course, old or new, always stores
+`0` there, because it was never meant to be read directly. That produced a meaningless date (always a
+week before someone's start date) rather than the real bucket-based pacing, so Phase 3 courses could
+never show up correctly there even under "Full progress" scope. I confirmed this against the exact
+data behind your new course (read directly from the database: `postLabel: "Month 3 - 4"`, applied to
+all 6 positions, effective 2026-01-01) — fixed by making the dashboard-level calculation use the same
+bucket-pacing logic your Planner/Schedule tab already uses, so both now agree.
+
+**Preventive action for future course additions**, in the "Manage courses" admin panel's "Add course"
+form:
+
+- The **Bucket** field (only relevant for Phase 3 courses) now shows the curriculum's existing bucket
+  labels as suggestions as you type, so you can join an existing bucket (e.g. "Month 4-6") instead of
+  accidentally typing a new, slightly different label (like "Month 3 - 4" vs. "Month 4-6") that splits
+  the 6-month pacing window into an extra slice for everyone in that curriculum.
+- **The Bucket field is now required** for a Phase 3 course. Previously it could be left blank, which
+  silently meant that course would never be assigned a due date at all — not "always overdue," but
+  permanently "unscheduled," with no way to notice from the dashboard. The form now blocks saving
+  until it's filled in.
+- The Bucket field's tooltip, and the Progress-basis dropdown's tooltip, both now spell out that Phase
+  3 courses only count toward the dashboard/People-table overdue figures under "Full progress (all
+  phases)" — not the default "Probation progress (Ph.1+2)" — so this doesn't catch you by surprise
+  again.
+
+Your existing `HS-K-4000-001` course itself needed no data changes — its stored bucket label ("Month
+3 - 4") is valid, just not one shared with any existing bucket in the base curricula, so it now paces
+as its own ~6-8 week slice within the 6-month window. Once you switch the dashboard to "Full progress
+(all phases)", it will show correctly for anyone whose position started long enough ago for that slice
+to have passed.
+
 ## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
 This is the same page as everything above — I originally built this as a separate app and separate
@@ -492,8 +547,18 @@ position" everywhere — the dashboard tile, the combined Flag, and the panel me
 genuinely curriculum-matched method for the same person still counts normally; the full pre-existing
 suite (including the v3.9 suite, whose badge-status fixture was updated to use only genuine
 Gas-curriculum method codes since it had been relying on 5000-series codes as a "no curriculum ties to
-anyone" stand-in that v3.10 correctly retires) was re-run afterward and confirmed to still pass.
-However, this sandbox's network access doesn't
+anyone" stand-in that v3.10 correctly retires) was re-run afterward and confirmed to still pass; and
+new for v3.11 — a mocked veteran Gas analyst (position effective 2023, every Phase 1/2 course already
+Passed) with the exact custom-course record read from your live database for `HS-K-4000-001`
+(`postLabel: "Month 3 - 4"`, all 6 positions, effective 2026-01-01) correctly reads "Complete" under
+the default "Probation (Ph.1+2)" scope (confirming Phase 3 exclusion there is by design, unchanged),
+then correctly reads as overdue once switched to "Full progress (all phases)"; the same overdue date
+also drives the "Overdue" chip on that person's own Planner/Schedule row, confirming both views now
+agree; and in the "Manage courses" admin panel, the Bucket field's datalist correctly lists the Gas
+curriculum's existing bucket labels, and attempting to save a new Phase 3 course with an empty Bucket
+is correctly blocked while one with a Bucket fills in saves normally — the full pre-existing suite was
+re-run afterward (v3.9 and v3.10's suites included) and confirmed to still pass. However, this
+sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
 confirm the 24 people and their Passed/Not Started course statuses look right, add a test person
@@ -518,7 +583,11 @@ take a look at the People table's Flag column to confirm it now reads as one cle
 instead of two. For v3.10, check Nguyen Dinh Vinh and Van Minh Tien's own pages and confirm their
 `CL-T-5000-xxx`/`CL-T-6000-xxx` (Polyolefins-section) methods now read "not required for current
 position" and no longer drive the dashboard tile or their People-table Flag, and spot-check a few
-other Gas/Oil/Utility analysts with older evaluation history for the same pattern.
+other Gas/Oil/Utility analysts with older evaluation history for the same pattern. For v3.11, switch
+the Progress-basis dropdown to "Full progress (all phases)" and confirm `HS-K-4000-001` now shows up
+correctly in the Progress %/Flag figures for people whose position started long enough ago, and try
+adding a test Phase 3 course in "Manage courses" with the Bucket field left blank to confirm it's
+now blocked from saving.
 
 ## Everyday use
 
