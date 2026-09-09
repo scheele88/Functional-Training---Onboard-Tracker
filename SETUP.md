@@ -19,8 +19,9 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.5) version — see "Position changes / rotations", "Per-person Status", "Progress scope
-  (new)", and "Export Report" below for what's new.
+  (v3.6) version — see "Position changes / rotations", "Per-person Status", "Progress scope
+  (new)", "Export Report", and **"Test Methods — Competency & Re-evaluation Tracking (new)"** below
+  for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -129,14 +130,76 @@ are excluded from every section, same as the rest of the dashboard. The file dow
 `Olefins-UT-Training-Report-<date>.pptx` and is safe to re-run as often as you like since it always
 reflects whatever's on screen right now.
 
+## Test Methods — Competency & Re-evaluation Tracking (new, v3.6)
+
+This is the same page as everything above — I originally built this as a separate app and separate
+database tables, then folded it into this tracker once it was clear that's how you wanted it used.
+If you have `index_competency.html`, `config_competency.js`, `migration_cet.sql`, or
+`SETUP_competency.md` from an earlier message in this conversation, **you can ignore/discard all
+four** — there's no separate app to set up. Everything below lives in this same `index.html`, uses
+the same login-free link, and shares the same 24-person roster and admin password as the course
+tracker.
+
+**The problem it solves.** CL-D-1000-0010 *Competency evaluation list for testing method (Rev.08)*
+defines which of the lab's 179 routine test methods need periodic re-evaluation/retraining, how
+often (1 / 2 / 3 years, or "-" for methods that don't require it), and which evaluation type
+applies — but it's a static list, not a tracker. This adds the missing piece: assign each analyst
+the methods they're expected to be competent in, log each evaluation as it happens, and the page
+computes every next-due date and flags what's overdue, due soon, never evaluated, or failed and
+needing retraining — automatically, section-wide.
+
+**Where it shows up:**
+
+- A new **"Test methods needing attention"** tile on the dashboard (overdue + failed-retrain +
+  never-evaluated, active people only) — click it to filter the People table to just those people.
+- A new **Methods** column in the People table, showing each person's worst-case status.
+- A new **"Test Methods — Competency & Re-evaluation"** panel at the bottom of every person's own
+  page — tick which of the 179 methods they're expected to be competent in (search/filter the full
+  list, or view "Assigned only"), click **Log eval.** to record a date/type/result/evaluator/notes
+  for any assigned method, and click **History** to see every past evaluation for that method. This
+  is additive — nothing is overwritten, and the tracker always computes status from the most recent
+  entry.
+- A new **"Manage test methods"** button in the header (next to "Manage courses", behind the same
+  admin password) — edit each method's re-evaluation frequency, type, remarks, or active/inactive
+  status, or add a custom method not in CL-D-1000-0010.
+
+**Status badges**, computed from each person's evaluation history for that method:
+
+| Badge | Meaning |
+|---|---|
+| **N/A** | Frequency is "-" — no periodic re-evaluation required. |
+| **Never evaluated** | Assigned, a frequency applies, but nothing has been logged yet. |
+| **Overdue** | Past the computed next-due date (last evaluation date + frequency). |
+| **Due soon** | Within 60 days of the next-due date (change `METHOD_DUE_SOON_DAYS` near the top of the script if the lab wants a different lead time). |
+| **On track** | Comfortably before the next-due date. |
+| **Failed — retrain** | The most recent logged evaluation was a **Fail**. Per the source document's own note ("If Tester fail re-evaluation, they shall be trained again"), this overrides date-based status entirely — the person doesn't read "on track" again until a new, passing evaluation is logged. |
+
+**How the source list was read.** All 179 methods came from your `CLD10000010_Competency
+evaluation list for testing method Rev.08.xlsx`: 6 methods at 1-year frequency, 12 at 2-year, 101
+at 3-year, and 60 marked "-" (no periodic re-evaluation). 3 methods (Melt Flow Rate / density
+tests) use **"Intralaboratory"** rather than a plain A–D letter as their re-evaluation type, per the
+sheet's own note. One row (`CL-T-5000-0064`) is marked *Reference only* with no evaluation type — it
+loaded in but inactive by default, so it won't show up as assignable unless you reactivate it from
+"Manage test methods." The five method categories used to group the list (Gas Chromatography,
+Petroleum & Physical Properties, Water & Environmental, Polymer/Raw Material & Catalyst, Film &
+Mechanical Properties) are my own grouping by Document No. prefix, purely a navigation aid — not
+something the source document itself states, so rename or regroup however suits the lab if these
+don't match how you think about the test methods.
+
+**Starts empty, on purpose.** No historical evaluation dates were seeded in — you asked to fill
+those in yourselves once this was live, so every method starts as "Never evaluated" until it's
+assigned and a first evaluation is logged.
+
 ## Setting it up on GitHub Pages
 
 ## Where the data lives
 
 Your existing Supabase project — "LSP Lab ISO 17025 Tracker" (the same one behind your ISO 17025
-tracker) — now also has two new tables for this app: `onb_people` and `onb_settings`. They're
-namespaced with an `onb_` prefix so they don't collide with the ISO tracker's own tables. All 24
-people currently in the tracker (including the 4 newcomers) have already been loaded in.
+tracker) — now has three tables for this app: `onb_people`, `onb_settings`, and (new in v3.6)
+`onb_methods` (the 179-method catalog from CL-D-1000-0010; each person's method assignments and
+evaluation history live in a `methods` column on `onb_people` itself, alongside their course data).
+They're namespaced with an `onb_` prefix so they don't collide with the ISO tracker's own tables.
+All 24 people currently in the tracker (including the 4 newcomers) have already been loaded in.
 
 ## Setting it up on GitHub Pages
 
@@ -146,8 +209,9 @@ same steps you (or whoever set up the ISO 17025 tracker) already did for that ap
 1. **Create a GitHub repository** (or reuse/add a folder to an existing one) — e.g.
    `olefins-onboarding-tracker`. It can be public; nothing in these files is a secret (see the note
    in `config.js`).
-2. **Add these three files** (`index.html`, `config.js`, `migration.sql`) to the repository, at the
-   root (or in a `/docs` folder — see the next step).
+2. **Add `index.html` and `config.js`** to the repository, at the root (or in a `/docs` folder — see
+   the next step). The `migration*.sql` files are reference-only, already applied — you don't need
+   to upload them anywhere for the app to work.
 3. **Enable GitHub Pages**: repository Settings → Pages → set the source branch (usually `main`)
    and folder (`/root` or `/docs`, matching where you put the files).
 4. GitHub will give you a URL like `https://<your-username>.github.io/olefins-onboarding-tracker/`.
@@ -166,12 +230,23 @@ dashboard renders, and — new for v3.1 — change a person's position and confi
 put, the position history logs correctly, and a shared course keeps its Passed status while a
 new-only course starts fresh; new for v3.5 — switch the Progress dropdown through all three scopes
 and confirm the People table's column header and each person's percentage change accordingly, and
-that the Export Report still generates correctly under a non-default scope) — everything passed. However, this sandbox's network access doesn't
+that the Export Report still generates correctly under a non-default scope; new for v3.6 — every
+status badge (Overdue, Due soon, On track, N/A, Never evaluated, Failed–retrain) computed correctly
+against known dates, the dashboard tile and its click-to-filter behavior, assigning a method and
+logging an evaluation from a person's page, the evaluation history log, editing a method's frequency
+in "Manage test methods" and confirming it round-trips and immediately updates that method's status
+on every assigned person, adding a custom method, and the admin password gate correctly routing to
+"Manage test methods" vs. "Manage courses" depending on which button was clicked) — everything
+passed, and I re-ran the full pre-v3.6 test suite afterward to confirm nothing already working (course
+schedules, position changes, Export Report, Progress scope) regressed. However, this sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
 confirm the 24 people and their Passed/Not Started course statuses look right, add a test person
 and refresh the page to confirm it's still there, then delete the test person. Also worth trying
-the new Change Position flow once on a test person before relying on it for a real rotation.
+the new Change Position flow once on a test person before relying on it for a real rotation. For
+v3.6, open "Manage test methods" and confirm all 179 methods and their frequencies look right, then
+open a test person's page, assign a method, log an evaluation, refresh the page and confirm it's
+still there.
 
 ## Everyday use
 

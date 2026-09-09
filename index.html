@@ -203,6 +203,8 @@
   .flag-chip.status-newcomer{ background:var(--accent-soft); color:var(--accent-soft-ink); }
   .flag-chip.status-rotation{ background:var(--progress-soft); color:var(--progress-ink); }
   .flag-chip.status-others{ background:var(--surface-3); color:var(--ink-faint); }
+  .flag-chip.retrain{ background:var(--hold-soft); color:var(--hold-ink); }
+  .flag-chip.due-first{ background:var(--accent-soft); color:var(--accent-soft-ink); }
   table.people tr.row-resigned td{ opacity:.62; }
   table.people tr.row-resigned:hover td{ opacity:1; }
   .empty-state{ padding:40px 24px; text-align:center; color:var(--ink-muted); }
@@ -418,6 +420,7 @@
       </select>
       <button class="btn small" id="openExportReport">Export report</button>
       <button class="btn small" id="openAdmin">Manage courses</button>
+      <button class="btn small" id="openMethodsAdmin">Manage test methods</button>
       <button class="btn small" id="openPwdSet" title="Set or change the admin password">🔒</button>
       <span class="save-chip" id="saveChip" data-state="idle">Connecting…</span>
     </div>
@@ -537,15 +540,19 @@
     return `<span class="pos-pill" style="background:${pc.soft};color:${pc.ink}">${esc(label)}</span>`;
   }
 
-  let STATE = { people: {}, courseEdits: {}, customCourses: [] };
+  let STATE = { people: {}, courseEdits: {}, customCourses: [], methods: {} };
 
-  let view = "dashboard";       // "dashboard" | "person" | "admin"
+  let view = "dashboard";       // "dashboard" | "person" | "admin" | "methods-admin"
   let selectedPersonId = null;
   let addFormOpen = false;
   let removeConfirmId = null;   // person id currently showing "click again to remove"
-  let dashFilters = { position: "all", flag: "all", search: "", employment: "active", personStatus: "all" };
+  let dashFilters = { position: "all", flag: "all", search: "", employment: "active", personStatus: "all", methods: "all" };
   let selectedPeopleIds = new Set();  // dashboard multi-select for the compare panel (not persisted)
   let drillFilter = null;             // "in_progress" | "overdue" | "passed" | null
+  let pendingAdminView = "admin";     // which view the admin password gate opens into once unlocked — "admin" | "methods-admin"
+  let methodsAdminSearch = "";        // v3.6 — "Manage test methods" search box
+  let methodsAdminAddOpen = false;
+  let personMethodsUi = { search: "", statusFilter: "assigned", openEvalForm: null, openHistory: new Set() }; // v3.6 — per-person Test Methods panel state, reset when switching people
   let progressScope = "probation";    // "probation" | "full" | "test" — v3.5, not persisted, drives every section-wide % (tiles, position grid, People table, Export Report)
   let saveTimer = null;
   // Live, shared persistence via Supabase (see config.js for the project URL/anon key) — every
@@ -867,6 +874,93 @@
     return Object.assign({total, pct}, counts);
   }
 
+  // ---------- Test-method competency / re-evaluation tracking (v3.6) ----------
+  // Per CL-D-1000-0010 Competency evaluation list for testing method (Rev.08): 179 routine test
+  // methods, each with a re-evaluation Frequency (1 / 2 / 3 years, or "-" = none required) and a
+  // re-evaluation Type. This is tracked per analyst, per method — separately from the course
+  // curriculum above, on STATE.methods (the method catalog, shared) and each person's own
+  // .methods jsonb (assignment + evaluation history). See SETUP.md for the full explanation.
+  const METHOD_DUE_SOON_DAYS = 60; // general lead-time default, not specified by the source document
+  const METHOD_CATEGORY_MAP = { "2":"Gas Chromatography / Gas Analysis", "3":"Petroleum & Physical Properties", "4":"Water & Environmental", "5":"Polymer, Raw Material & Catalyst", "6":"Film & Mechanical Properties" };
+  const METHOD_RESULT_VALUES = ["Pass","Fail"];
+  const METHOD_EVAL_TYPE_VALUES = ["A","B","C","D","Intralaboratory"];
+  const METHOD_FREQ_VALUES = [1,2,3,null];
+  // overdue/retrain/due_first take visual priority over due_soon/ok/na in any rollup.
+  const METHOD_STATUS_LABEL = { overdue:"Overdue", retrain:"Failed — retrain", due_first:"Never evaluated", due_soon:"Due soon", ok:"On track", na:"N/A" };
+  const METHOD_STATUS_CHIP_CLASS = { overdue:"overdue", retrain:"retrain", due_first:"due-first", due_soon:"progress", ok:"ontrack", na:"none" };
+  function methodCategory(id){ const m = /^CL-T-(\d)000-/.exec(id||""); return METHOD_CATEGORY_MAP[m&&m[1]] || "Other"; }
+  function addYears(dateStr, years){ const d = parseISO(dateStr); if(!d) return null; d.setFullYear(d.getFullYear()+years); return toISO(d); }
+  function daysBetween(aISO, bISO){ const a = parseISO(aISO), b = parseISO(bISO); if(!a||!b) return null; return Math.round((b-a)/86400000); }
+  function todayISO(){ return toISO(new Date()); }
+  function cssId(id){ return String(id||"").replace(/[^a-zA-Z0-9]/g,"_"); }
+  function latestMethodEval(history){
+    if(!history || !history.length) return null;
+    return history.slice().sort((a,b)=> (b.date||"").localeCompare(a.date||""))[0];
+  }
+  // Returns {status, nextDue, lastDate, daysUntil}. "retrain" (most recent result = Fail) overrides
+  // the date-based computation entirely, per the source document's own note: "If Tester fail
+  // re-evaluation, they shall be trained again."
+  function methodStatus(freqYears, history){
+    const latest = latestMethodEval(history);
+    if(!latest) return { status: freqYears==null ? "na" : "due_first", nextDue:null, lastDate:null };
+    if(latest.result === "Fail") return { status:"retrain", nextDue:null, lastDate:latest.date };
+    if(freqYears==null) return { status:"na", nextDue:null, lastDate:latest.date };
+    const nextDue = addYears(latest.date, freqYears);
+    const days = daysBetween(todayISO(), nextDue);
+    const status = days<0 ? "overdue" : (days<=METHOD_DUE_SOON_DAYS ? "due_soon" : "ok");
+    return { status, nextDue, lastDate:latest.date, daysUntil:days };
+  }
+  // Every catalog method as it applies to this person, each with computed status. Only assigned
+  // methods unless opts.includeUnassigned — sorted by category then Document No.
+  function personMethodEntries(person, opts){
+    opts = opts || {};
+    const pm = person.methods || {};
+    let rows = Object.keys(STATE.methods).map(id=>{
+      const m = STATE.methods[id];
+      const entry = pm[id] || null;
+      const assigned = !!(entry && entry.assigned);
+      const history = (entry && entry.history) || [];
+      return { id, method:m, assigned, history, status: methodStatus(m.freq_years, history) };
+    });
+    if(!opts.includeUnassigned) rows = rows.filter(r=>r.assigned);
+    rows.sort((a,b)=>{
+      const ca = methodCategory(a.id), cb = methodCategory(b.id);
+      if(ca!==cb) return ca.localeCompare(cb);
+      return a.id.localeCompare(b.id);
+    });
+    return rows;
+  }
+  function personMethodSummary(person){
+    const rows = personMethodEntries(person, {});
+    const c = { assigned: rows.length, overdue:0, retrain:0, due_first:0, due_soon:0, ok:0, na:0 };
+    rows.forEach(r=>{ c[r.status.status]++; });
+    return c;
+  }
+  // Worst-first status for a single summary chip (People table "Methods" column).
+  function personMethodWorstStatus(sum){
+    if(sum.retrain>0) return "retrain";
+    if(sum.overdue>0) return "overdue";
+    if(sum.due_first>0) return "due_first";
+    if(sum.due_soon>0) return "due_soon";
+    if(sum.assigned>0) return "ok";
+    return null; // nothing assigned — no chip
+  }
+  // Section-wide rollup (active people only), for the dashboard tile.
+  function sectionMethodSummary(){
+    const c = { people:0, assigned:0, overdue:0, retrain:0, due_first:0, due_soon:0, ok:0, attention:0 };
+    Object.values(STATE.people).filter(isActive).forEach(p=>{
+      c.people++;
+      const s = personMethodSummary(p);
+      c.assigned += s.assigned; c.overdue += s.overdue; c.retrain += s.retrain;
+      c.due_first += s.due_first; c.due_soon += s.due_soon; c.ok += s.ok;
+    });
+    c.attention = c.overdue + c.retrain + c.due_first;
+    return c;
+  }
+  function methodRow(m){
+    return { id:m.id, name:m.name||"", classroom: m.classroom!==false, training_type: m.training_type||null, freq_years: (m.freq_years===""||m.freq_years==null)?null:Number(m.freq_years), reeval_type: m.reeval_type||null, remarks: m.remarks||"", active: m.active!==false };
+  }
+
   // ---------- persistence (Supabase) ----------
   // Unlike the old Artifact-publish version, this talks directly to a real Postgres database
   // (see config.js). Every open copy of this page — hosted, local file, shared-drive copy, doesn't
@@ -896,7 +990,8 @@
       end_date: p.endDate||"", items: p.items||{},
       position_effective_date: p.positionEffectiveDate || p.startDate || "",
       position_history: p.positionHistory || [],
-      status_override: p.statusOverride || ""
+      status_override: p.statusOverride || "",
+      methods: p.methods || {}
     };
   }
   async function loadFromSupabase(){
@@ -910,12 +1005,14 @@
     db = createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
     setSaveChip("connecting");
     try{
-      const [{data:people,error:pErr}, {data:settingsData,error:sErr}] = await Promise.all([
+      const [{data:people,error:pErr}, {data:settingsData,error:sErr}, {data:methodRows,error:mErr}] = await Promise.all([
         db.from("onb_people").select("*"),
-        db.from("onb_settings").select("*")
+        db.from("onb_settings").select("*"),
+        db.from("onb_methods").select("*")
       ]);
       if(pErr) throw pErr;
       if(sErr) throw sErr;
+      if(mErr) throw mErr;
       STATE.people = {};
       (people||[]).forEach(r=>{
         STATE.people[r.id] = {
@@ -924,9 +1021,12 @@
           items: r.items||{}, createdAt: r.created_at||toISO(new Date()),
           positionEffectiveDate: r.position_effective_date || r.start_date || "",
           positionHistory: r.position_history || [],
-          statusOverride: r.status_override || ""
+          statusOverride: r.status_override || "",
+          methods: r.methods || {}
         };
       });
+      STATE.methods = {};
+      (methodRows||[]).forEach(r=>{ STATE.methods[r.id] = r; });
       const settingsMap = {};
       (settingsData||[]).forEach(s=>{ settingsMap[s.key] = s.value; });
       try{ STATE.courseEdits = settingsMap.course_edits ? JSON.parse(settingsMap.course_edits) : {}; }catch(e){ STATE.courseEdits = {}; }
@@ -960,6 +1060,11 @@
         { key: "custom_courses", value: JSON.stringify(STATE.customCourses||[]) }
       ]);
       if(setErr) throw setErr;
+      const methodRows = Object.values(STATE.methods||{}).map(methodRow);
+      if(methodRows.length){
+        const { error: methErr } = await db.from("onb_methods").upsert(methodRows);
+        if(methErr) throw methErr;
+      }
       setSaveChip("saved");
     }catch(err){
       console.error("persist failed", err);
@@ -985,7 +1090,10 @@
     if(hash === ADMIN_PWD_HASH){
       sessionStorage.setItem(ADMIN_SESSION_KEY, "1");
       hideAdminGate();
-      view = "admin"; adminAddOpen = false; adminRemoveConfirmId = null; paint();
+      view = pendingAdminView || "admin";
+      adminAddOpen = false; adminRemoveConfirmId = null;
+      methodsAdminAddOpen = false;
+      paint();
     } else {
       errEl.textContent = "Incorrect password.";
       document.getElementById("admGatePwd").value = "";
@@ -1503,6 +1611,7 @@
 
   function renderDashboardTiles(){
     const s = sectionSummary();
+    const ms = sectionMethodSummary();
     return `
     <div class="tiles">
       <div class="tile ring-tile">
@@ -1513,6 +1622,7 @@
       <div class="tile clickable progress${drillFilter==='in_progress'?' active':''}" data-drill="in_progress"><div class="label">In progress</div><div class="value">${s.inprog}</div></div>
       <div class="tile clickable overdue${drillFilter==='overdue'?' active':''}" data-drill="overdue"><div class="label">Overdue courses</div><div class="value">${s.overdue}</div></div>
       <div class="tile clickable passed${drillFilter==='passed'?' active':''}" data-drill="passed"><div class="label">Completed courses</div><div class="value">${s.passed}<span class="unit">/ ${s.total}</span></div></div>
+      <div class="tile clickable overdue${dashFilters.methods==='attention'?' active':''}" data-methods-tile="attention" title="Overdue + Failed-retrain + Never-evaluated test methods (CL-D-1000-0010), active people only"><div class="label">Test methods needing attention</div><div class="value">${ms.attention}</div></div>
     </div>`;
   }
 
@@ -1551,6 +1661,7 @@
       });
     }
     if(dashFilters.personStatus!=="all") people = people.filter(p=>resolvedPersonStatus(p)===dashFilters.personStatus);
+    if(dashFilters.methods==="attention") people = people.filter(p=>{ const s = personMethodSummary(p); return (s.overdue+s.retrain+s.due_first)>0; });
     people.sort((a,b)=>{
       const oa = POSITION_ORDER.indexOf(a.positionKey), ob = POSITION_ORDER.indexOf(b.positionKey);
       if(oa!==ob) return oa-ob;
@@ -1563,7 +1674,7 @@
   function renderFilterBar(){
     const total = Object.keys(STATE.people).length;
     const resignedCount = Object.values(STATE.people).filter(p=>!isActive(p)).length;
-    const nonDefault = dashFilters.position!=='all'||dashFilters.flag!=='all'||dashFilters.search||dashFilters.employment!=='active'||dashFilters.personStatus!=='all';
+    const nonDefault = dashFilters.position!=='all'||dashFilters.flag!=='all'||dashFilters.search||dashFilters.employment!=='active'||dashFilters.personStatus!=='all'||dashFilters.methods!=='all';
     return `<div class="filter-bar">
       <div class="filters">
         <input type="text" id="searchName" placeholder="Search name or employee ID… (Enter)" value="${esc(dashFilters.search)}">
@@ -1659,7 +1770,7 @@
     return `<div class="gantt-scroll"><table class="people">
       <thead><tr>
         <th class="chk-col"><input type="checkbox" id="selectAllVisible" ${allSelected?'checked':''}></th>
-        <th>Name</th><th>Employee ID</th><th>Position</th><th>Start date</th><th>Status</th><th>Progress (${esc(PROGRESS_SCOPES[progressScope].short)})</th><th>Flag</th><th></th></tr></thead>
+        <th>Name</th><th>Employee ID</th><th>Position</th><th>Start date</th><th>Status</th><th>Progress (${esc(PROGRESS_SCOPES[progressScope].short)})</th><th>Flag</th><th title="Test-method re-evaluation status, per CL-D-1000-0010">Methods</th><th></th></tr></thead>
       <tbody>${people.map(p=>{
         const pr = personProgressScoped(p, progressScope);
         const active = isActive(p);
@@ -1669,6 +1780,10 @@
         const confirming = removeConfirmId===p.id;
         const rStatus = resolvedPersonStatus(p);
         const statusCell = `<span class="flag-chip status-${rStatus}">${esc(PERSON_STATUS_LABELS[rStatus])}</span>${p.statusOverride?' <span class="hint" style="font-size:11px">· manual</span>':''}${rStatus==='rotation'&&rotationFromTo(p)?`<div class="hint" style="font-size:11px">${esc(rotationFromTo(p))}</div>`:''}`;
+        const msum = personMethodSummary(p);
+        const worst = personMethodWorstStatus(msum);
+        const methodsCell = worst===null ? `<span class="flag-chip none">—</span>`
+          : `<span class="flag-chip ${METHOD_STATUS_CHIP_CLASS[worst]}">${worst==='ok' ? 'On track' : `${msum[worst]} ${METHOD_STATUS_LABEL[worst].toLowerCase()}`}</span>`;
         return `<tr${active?'':' class="row-resigned"'}>
           <td class="chk-col"><input type="checkbox" class="rowSelect" data-id="${p.id}" ${selectedPeopleIds.has(p.id)?'checked':''}></td>
           <td class="name" data-open="${p.id}">${esc(p.name)}</td>
@@ -1678,6 +1793,7 @@
           <td>${statusCell}</td>
           <td><div class="progress-cell"><div class="pbar"><i style="width:${pr.pct}%"></i></div><span class="pct">${pr.pct}%</span></div></td>
           <td>${flag}</td>
+          <td>${methodsCell}</td>
           <td><button class="btn small ${confirming?'danger-confirm':''}" data-remove="${p.id}">${confirming?'Click again':'Remove'}</button></td>
         </tr>`;
       }).join("")}</tbody>
@@ -1827,6 +1943,66 @@
         <div class="gantt-scroll"><table class="people admin-table">
           <thead><tr><th>Code</th><th>Topic</th><th>Type</th><th>Hours</th><th>Phase</th><th>Week / Bucket</th><th>Status</th><th></th></tr></thead>
           <tbody>${bodyRows}</tbody>
+        </table></div>
+      </section>
+    `;
+  }
+
+  // ---------- v3.6: "Manage test methods" admin view ----------
+  function renderMethodsAdminView(){
+    const q = methodsAdminSearch.toLowerCase();
+    const methods = Object.values(STATE.methods)
+      .filter(m=> !q || m.id.toLowerCase().indexOf(q)>=0 || (m.name||"").toLowerCase().indexOf(q)>=0)
+      .sort((a,b)=>{ const ca = methodCategory(a.id), cb = methodCategory(b.id); if(ca!==cb) return ca.localeCompare(cb); return a.id.localeCompare(b.id); });
+    let lastCat = null;
+    const bodyRows = methods.map(m=>{
+      const cat = methodCategory(m.id);
+      let catRow = "";
+      if(cat!==lastCat){ lastCat = cat; catRow = `<tr class="admin-divider"><td colspan="7">${esc(cat)}</td></tr>`; }
+      const active = m.active!==false;
+      return `${catRow}<tr data-method-admin-id="${esc(m.id)}"${active?'':' class="row-inactive"'}>
+        <td class="mono" style="font-size:11px">${esc(m.id)}</td>
+        <td><input type="text" class="admin-input" data-method-admin-field="name" value="${esc(m.name||'')}"></td>
+        <td>
+          <select class="admin-input" data-method-admin-field="freq_years">
+            ${METHOD_FREQ_VALUES.map(v=>`<option value="${v===null?'':v}" ${(m.freq_years===v||(v===null&&m.freq_years==null))?'selected':''}>${v===null?'- (none)':v+' yr'}</option>`).join("")}
+          </select>
+        </td>
+        <td>
+          <select class="admin-input" data-method-admin-field="reeval_type">
+            <option value="" ${!m.reeval_type?'selected':''}>—</option>
+            ${METHOD_EVAL_TYPE_VALUES.map(v=>`<option value="${v}" ${m.reeval_type===v?'selected':''}>${v}</option>`).join("")}
+          </select>
+        </td>
+        <td><input type="text" class="admin-input" data-method-admin-field="remarks" value="${esc(m.remarks||'')}" style="width:130px"></td>
+        <td>${active ? '<span class="flag-chip ontrack">Active</span>' : '<span class="flag-chip none">Inactive</span>'}</td>
+        <td><button class="btn small" data-method-admin-toggle="${esc(m.id)}" data-method-admin-active="${active?'true':'false'}">${active?'Deactivate':'Reactivate'}</button></td>
+      </tr>`;
+    }).join("");
+    return `
+      <div class="backbar"><button class="link" id="backToDashFromMethodsAdmin">&larr; Back to dashboard</button></div>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Manage test methods</h2>
+          <div class="meta">${Object.keys(STATE.methods).length} methods loaded from CL-D-1000-0010 Rev.08 &nbsp;·&nbsp; edits save automatically</div>
+        </div>
+        <div class="people-toolbar">
+          <input type="text" id="methodsAdminSearch" placeholder="Search doc no. or name" value="${esc(methodsAdminSearch)}" style="width:260px">
+          <span class="hint">Frequency, re-evaluation type, remarks, and active/inactive apply to every person assigned this method. Deactivating a method hides it from "Assigned only" views but keeps everyone's history.</span>
+          <button class="btn primary" id="toggleMethodsAdminAdd">${methodsAdminAddOpen?'Close':'+ Add custom method'}</button>
+        </div>
+        ${methodsAdminAddOpen ? `<div class="admin-add-form open">
+          <div class="field"><label>Doc. No.</label><input type="text" id="newMethodId" placeholder="e.g. CL-T-9000-0001" style="width:170px"></div>
+          <div class="field" style="min-width:260px;flex:1"><label>Name</label><input type="text" id="newMethodName" placeholder="Test method name"></div>
+          <div class="field"><label>Frequency</label>
+            <select id="newMethodFreq">${METHOD_FREQ_VALUES.map(v=>`<option value="${v===null?'':v}" ${v===3?'selected':''}>${v===null?'- (none)':v+' yr'}</option>`).join("")}</select>
+          </div>
+          <button class="btn primary" id="saveNewMethod">Add method</button>
+          <button class="btn" id="cancelNewMethod">Cancel</button>
+        </div>` : ""}
+        <div class="gantt-scroll"><table class="people admin-table">
+          <thead><tr><th>Doc No.</th><th>Test Method Name</th><th>Re-eval Frequency</th><th>Re-eval Type</th><th>Remarks</th><th>Status</th><th></th></tr></thead>
+          <tbody>${bodyRows || `<tr><td colspan="7" class="empty-state">No matches.</td></tr>`}</tbody>
         </table></div>
       </section>
     `;
@@ -2085,7 +2261,94 @@
           </table>
         </div>
       </section>
+      ${renderPersonMethodsSection(person)}
     `;
+  }
+
+  // ---------- v3.6: per-person Test Methods panel ----------
+  function renderPersonMethodsSection(person){
+    const sum = personMethodSummary(person);
+    const ui = personMethodsUi;
+    let rows = personMethodEntries(person, {includeUnassigned: true})
+      .filter(r=>{
+        if(ui.statusFilter==="assigned") return r.assigned;
+        if(ui.statusFilter==="unassigned") return !r.assigned;
+        if(ui.statusFilter==="all") return true;
+        return r.assigned && r.status.status===ui.statusFilter;
+      });
+    if(ui.search){
+      const q = ui.search.toLowerCase();
+      rows = rows.filter(r=> r.id.toLowerCase().indexOf(q)>=0 || (r.method.name||"").toLowerCase().indexOf(q)>=0);
+    }
+    let lastCat = null;
+    const bodyRows = rows.map(r=>{
+      const cat = methodCategory(r.id);
+      let catRow = "";
+      if(cat!==lastCat){ lastCat = cat; catRow = `<tr class="admin-divider"><td colspan="8">${esc(cat)}</td></tr>`; }
+      const st = r.status;
+      const freqLabel = r.method.freq_years==null ? "—" : `${r.method.freq_years} yr`;
+      const evalFormOpen = ui.openEvalForm===r.id;
+      const histOpen = ui.openHistory.has(r.id);
+      const hist = (r.history||[]).slice().sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+      const inactive = r.method.active===false;
+      return `${catRow}
+      <tr${inactive?' class="row-inactive"':''}>
+        <td class="chk-col"><input type="checkbox" data-method-assign="${esc(r.id)}" ${r.assigned?'checked':''}></td>
+        <td class="mono" style="font-size:11px">${esc(r.id)}${inactive?' <span class="hint">(inactive)</span>':''}</td>
+        <td>${esc(r.method.name||"")}</td>
+        <td>${freqLabel}</td>
+        <td class="mono">${st.lastDate?esc(fmtDate(parseISO(st.lastDate))):'—'}</td>
+        <td class="mono">${st.nextDue?esc(fmtDate(parseISO(st.nextDue))):'—'}</td>
+        <td><span class="flag-chip ${METHOD_STATUS_CHIP_CLASS[st.status]}">${esc(METHOD_STATUS_LABEL[st.status])}</span></td>
+        <td style="white-space:nowrap">
+          ${r.assigned?`<button class="btn small" data-method-log="${esc(r.id)}">Log eval.</button>`:''}
+          ${hist.length?`<button class="btn small" data-method-hist="${esc(r.id)}">${histOpen?'Hide':'History ('+hist.length+')'}</button>`:''}
+        </td>
+      </tr>
+      ${evalFormOpen ? `<tr><td colspan="8"><div class="admin-add-form open" style="margin:6px 0">
+          <div class="field"><label>Date</label><input type="date" id="methodEvalDate_${cssId(r.id)}" value="${todayISO()}"></div>
+          <div class="field"><label>Type used</label>
+            <select id="methodEvalType_${cssId(r.id)}">
+              <option value="">—</option>
+              ${METHOD_EVAL_TYPE_VALUES.map(v=>`<option value="${v}" ${r.method.reeval_type===v?'selected':''}>${v}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field"><label>Result</label>
+            <select id="methodEvalResult_${cssId(r.id)}">${METHOD_RESULT_VALUES.map(v=>`<option value="${v}">${v}</option>`).join("")}</select>
+          </div>
+          <div class="field" style="min-width:160px"><label>Evaluator</label><input type="text" id="methodEvalEvaluator_${cssId(r.id)}" style="width:100%"></div>
+          <div class="field" style="min-width:200px;flex:1"><label>Notes</label><input type="text" id="methodEvalNotes_${cssId(r.id)}" style="width:100%"></div>
+          <button class="btn primary" data-method-save-eval="${esc(r.id)}">Save evaluation</button>
+          <button class="btn" data-method-cancel-eval="${esc(r.id)}">Cancel</button>
+        </div></td></tr>` : ""}
+      ${histOpen && hist.length ? `<tr><td colspan="8"><div class="hint" style="padding:4px 0">
+        ${hist.map(h=>`${esc(fmtDate(parseISO(h.date)))} — ${esc(h.result||'')}${h.evalType?' · Type '+esc(h.evalType):''}${h.evaluator?' · '+esc(h.evaluator):''}${h.notes?' · '+esc(h.notes):''}`).join('<br>')}
+      </div></td></tr>` : ""}`;
+    }).join("");
+    return `
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Test Methods — Competency &amp; Re-evaluation</h2>
+          <div class="meta">Per CL-D-1000-0010 Rev.08 &nbsp;·&nbsp; ${sum.assigned} assigned &nbsp;·&nbsp; ${sum.overdue} overdue &nbsp;·&nbsp; ${sum.retrain} failed–retrain &nbsp;·&nbsp; ${sum.due_first} never evaluated &nbsp;·&nbsp; ${sum.due_soon} due soon</div>
+        </div>
+        <div class="people-toolbar">
+          <input type="text" id="personMethodSearch" placeholder="Search doc no. or name" value="${esc(ui.search)}" style="width:220px">
+          <select id="personMethodStatusFilter">
+            <option value="assigned" ${ui.statusFilter==='assigned'?'selected':''}>Assigned only</option>
+            <option value="all" ${ui.statusFilter==='all'?'selected':''}>All ${Object.keys(STATE.methods).length} methods</option>
+            <option value="unassigned" ${ui.statusFilter==='unassigned'?'selected':''}>Not yet assigned</option>
+            <option value="overdue" ${ui.statusFilter==='overdue'?'selected':''}>Overdue</option>
+            <option value="retrain" ${ui.statusFilter==='retrain'?'selected':''}>Failed — retrain</option>
+            <option value="due_first" ${ui.statusFilter==='due_first'?'selected':''}>Never evaluated</option>
+            <option value="due_soon" ${ui.statusFilter==='due_soon'?'selected':''}>Due soon</option>
+          </select>
+          <span class="hint">Tick to assign a method to this person; untick to remove it from their qualification list (history is kept). "Failed — retrain" overrides the date-based status until a new, passing evaluation is logged.</span>
+        </div>
+        <div class="gantt-scroll"><table class="people admin-table">
+          <thead><tr><th style="width:34px"></th><th>Doc No.</th><th>Test Method Name</th><th>Freq.</th><th>Last evaluated</th><th>Next due</th><th>Status</th><th></th></tr></thead>
+          <tbody>${bodyRows || `<tr><td colspan="8" class="empty-state">No methods match this filter.</td></tr>`}</tbody>
+        </table></div>
+      </section>`;
   }
 
   // ---------- paint / handlers ----------
@@ -2123,12 +2386,14 @@
     document.getElementById("pageTitle").textContent = view==="person" && STATE.people[selectedPersonId]
       ? STATE.people[selectedPersonId].name + " — Onboarding"
       : view==="admin" ? "Manage Training Courses"
+      : view==="methods-admin" ? "Manage Test Methods"
       : "Olefins Section — Onboarding & Qualification";
     document.getElementById("pageSubtitle").textContent = view==="person"
       ? "Source: CL-D-1000-0001 Functional Training Plan for Olefins (Rev 1.1)"
       : view==="admin" ? "Add, edit, or retire courses — shared across positions where the same course applies, with a dated, scoped effective date for each change"
+      : view==="methods-admin" ? "Source: CL-D-1000-0010 Competency evaluation list for testing method (Rev.08)"
       : "Section-wide onboarding dashboard — Section Manager, Supervisor (SS), Lead/Senior Engineer, and Gas/Oil/Utility Analysts";
-    document.getElementById("root").innerHTML = view==="person" ? renderPersonView() : view==="admin" ? renderAdminView() : renderDashboard();
+    document.getElementById("root").innerHTML = view==="person" ? renderPersonView() : view==="admin" ? renderAdminView() : view==="methods-admin" ? renderMethodsAdminView() : renderDashboard();
     document.getElementById("footNote").innerHTML = footNote();
     attachHandlers();
   }
@@ -2190,7 +2455,11 @@
         paint();
       });
       root.querySelectorAll("td.name[data-open]").forEach(td=>{
-        td.addEventListener("click", ()=>{ selectedPersonId = td.getAttribute("data-open"); view="person"; paint(); });
+        td.addEventListener("click", ()=>{
+          selectedPersonId = td.getAttribute("data-open"); view="person";
+          personMethodsUi = { search: "", statusFilter: "assigned", openEvalForm: null, openHistory: new Set() };
+          paint();
+        });
       });
       root.querySelectorAll("button[data-remove]").forEach(btn=>{
         btn.addEventListener("click", ()=>{
@@ -2219,6 +2488,15 @@
       const clearDrillBtn = document.getElementById("clearDrill");
       if(clearDrillBtn) clearDrillBtn.addEventListener("click", ()=>{ drillFilter=null; paint(); });
 
+      // v3.6 — "Test methods needing attention" dashboard tile filters the People table below.
+      root.querySelectorAll("[data-methods-tile]").forEach(tile=>{
+        tile.addEventListener("click", ()=>{
+          const key = tile.getAttribute("data-methods-tile");
+          dashFilters.methods = (dashFilters.methods===key) ? "all" : key;
+          paint();
+        });
+      });
+
       // Clickable position cards: filter the People table to that position.
       root.querySelectorAll(".pos-card[data-poscard]").forEach(card=>{
         card.addEventListener("click", ()=>{
@@ -2240,7 +2518,7 @@
       const personStatusFilter = document.getElementById("filterPersonStatus");
       if(personStatusFilter) personStatusFilter.addEventListener("change", ()=>{ dashFilters.personStatus = personStatusFilter.value; paint(); });
       const clearFiltersBtn = document.getElementById("clearFilters");
-      if(clearFiltersBtn) clearFiltersBtn.addEventListener("click", ()=>{ dashFilters = {position:"all", flag:"all", search:"", employment:"active", personStatus:"all"}; paint(); });
+      if(clearFiltersBtn) clearFiltersBtn.addEventListener("click", ()=>{ dashFilters = {position:"all", flag:"all", search:"", employment:"active", personStatus:"all", methods:"all"}; paint(); });
 
       // Selection / compare
       root.querySelectorAll("input.rowSelect").forEach(chk=>{
@@ -2376,6 +2654,54 @@
           paint();
         });
       });
+    } else if(view==="methods-admin"){
+      const backMethodsAdminBtn = document.getElementById("backToDashFromMethodsAdmin");
+      if(backMethodsAdminBtn) backMethodsAdminBtn.addEventListener("click", ()=>{ view="dashboard"; paint(); });
+
+      const methodsSearchEl = document.getElementById("methodsAdminSearch");
+      if(methodsSearchEl) methodsSearchEl.addEventListener("change", ()=>{ methodsAdminSearch = methodsSearchEl.value.trim(); paint(); });
+
+      const toggleMethodsAddBtn = document.getElementById("toggleMethodsAdminAdd");
+      if(toggleMethodsAddBtn) toggleMethodsAddBtn.addEventListener("click", ()=>{ methodsAdminAddOpen = !methodsAdminAddOpen; paint(); });
+      const cancelNewMethodBtn = document.getElementById("cancelNewMethod");
+      if(cancelNewMethodBtn) cancelNewMethodBtn.addEventListener("click", ()=>{ methodsAdminAddOpen = false; paint(); });
+      const saveNewMethodBtn = document.getElementById("saveNewMethod");
+      if(saveNewMethodBtn) saveNewMethodBtn.addEventListener("click", ()=>{
+        const idEl = document.getElementById("newMethodId");
+        const nameEl = document.getElementById("newMethodName");
+        const freqEl = document.getElementById("newMethodFreq");
+        const id = (idEl.value||"").trim();
+        const name = (nameEl.value||"").trim();
+        if(!id || !name){ (id?nameEl:idEl).focus(); return; }
+        if(STATE.methods[id]){ alert("That Document No. already exists."); return; }
+        STATE.methods[id] = { id, name, classroom:true, training_type:null, freq_years: freqEl.value===""?null:Number(freqEl.value), reeval_type:null, remarks:"", active:true };
+        methodsAdminAddOpen = false;
+        scheduleSave();
+        paint();
+      });
+
+      root.querySelectorAll("tr[data-method-admin-id]").forEach(tr=>{
+        const id = tr.getAttribute("data-method-admin-id");
+        tr.querySelectorAll("[data-method-admin-field]").forEach(el=>{
+          el.addEventListener("change", ()=>{
+            const field = el.getAttribute("data-method-admin-field");
+            const m = STATE.methods[id]; if(!m) return;
+            if(field==="freq_years") m.freq_years = el.value===""? null : Number(el.value);
+            else if(field==="reeval_type") m.reeval_type = el.value || null;
+            else m[field] = el.value;
+            scheduleSave();
+          });
+        });
+      });
+      root.querySelectorAll("[data-method-admin-toggle]").forEach(btn=>{
+        btn.addEventListener("click", ()=>{
+          const id = btn.getAttribute("data-method-admin-toggle");
+          const m = STATE.methods[id]; if(!m) return;
+          m.active = !(btn.getAttribute("data-method-admin-active")==="true");
+          scheduleSave();
+          paint();
+        });
+      });
     } else {
       const backBtn = document.getElementById("backToDash");
       if(backBtn) backBtn.addEventListener("click", ()=>{ view="dashboard"; removeConfirmId=null; paint(); });
@@ -2473,6 +2799,63 @@
           scheduleSave();
         });
       });
+
+      // v3.6 — Test Methods panel (competency / re-evaluation tracking, CL-D-1000-0010)
+      const methodSearchEl = document.getElementById("personMethodSearch");
+      if(methodSearchEl) methodSearchEl.addEventListener("input", ()=>{
+        personMethodsUi.search = methodSearchEl.value;
+        paint();
+        const el2 = document.getElementById("personMethodSearch");
+        if(el2){ el2.focus(); el2.setSelectionRange(el2.value.length, el2.value.length); }
+      });
+      const methodStatusFilterEl = document.getElementById("personMethodStatusFilter");
+      if(methodStatusFilterEl) methodStatusFilterEl.addEventListener("change", ()=>{ personMethodsUi.statusFilter = methodStatusFilterEl.value; paint(); });
+      root.querySelectorAll("[data-method-assign]").forEach(chk=>{
+        chk.addEventListener("change", ()=>{
+          const person = STATE.people[selectedPersonId]; if(!person) return;
+          const mid = chk.getAttribute("data-method-assign");
+          if(!person.methods) person.methods = {};
+          if(!person.methods[mid]) person.methods[mid] = { assigned:false, history:[] };
+          person.methods[mid].assigned = chk.checked;
+          scheduleSave();
+          paint();
+        });
+      });
+      root.querySelectorAll("[data-method-log]").forEach(btn=>{
+        btn.addEventListener("click", ()=>{ personMethodsUi.openEvalForm = btn.getAttribute("data-method-log"); paint(); });
+      });
+      root.querySelectorAll("[data-method-cancel-eval]").forEach(btn=>{
+        btn.addEventListener("click", ()=>{ personMethodsUi.openEvalForm = null; paint(); });
+      });
+      root.querySelectorAll("[data-method-hist]").forEach(btn=>{
+        btn.addEventListener("click", ()=>{
+          const id = btn.getAttribute("data-method-hist");
+          if(personMethodsUi.openHistory.has(id)) personMethodsUi.openHistory.delete(id); else personMethodsUi.openHistory.add(id);
+          paint();
+        });
+      });
+      root.querySelectorAll("[data-method-save-eval]").forEach(btn=>{
+        btn.addEventListener("click", ()=>{
+          const mid = btn.getAttribute("data-method-save-eval");
+          const person = STATE.people[selectedPersonId]; if(!person) return;
+          const cid = cssId(mid);
+          const dateEl = document.getElementById("methodEvalDate_"+cid);
+          const date = dateEl ? dateEl.value : "";
+          if(!date) return;
+          const evalType = (document.getElementById("methodEvalType_"+cid)||{}).value || "";
+          const result = (document.getElementById("methodEvalResult_"+cid)||{}).value || "Pass";
+          const evaluator = ((document.getElementById("methodEvalEvaluator_"+cid)||{}).value || "").trim();
+          const notes = ((document.getElementById("methodEvalNotes_"+cid)||{}).value || "").trim();
+          if(!person.methods) person.methods = {};
+          if(!person.methods[mid]) person.methods[mid] = { assigned:true, history:[] };
+          person.methods[mid].assigned = true;
+          if(!person.methods[mid].history) person.methods[mid].history = [];
+          person.methods[mid].history.push({ date, evalType, result, evaluator, notes });
+          personMethodsUi.openEvalForm = null;
+          scheduleSave();
+          paint();
+        });
+      });
     }
   }
 
@@ -2480,8 +2863,15 @@
   // rather than inside attachHandlers(), which would otherwise stack a duplicate listener on every repaint.
   const openAdminBtn = document.getElementById("openAdmin");
   if(openAdminBtn) openAdminBtn.addEventListener("click", ()=>{
+    pendingAdminView = "admin";
     if(ADMIN_PWD_HASH && sessionStorage.getItem(ADMIN_SESSION_KEY)!=="1"){ showAdminGate(); return; }
     view="admin"; adminAddOpen=false; adminRemoveConfirmId=null; paint();
+  });
+  const openMethodsAdminBtn = document.getElementById("openMethodsAdmin");
+  if(openMethodsAdminBtn) openMethodsAdminBtn.addEventListener("click", ()=>{
+    pendingAdminView = "methods-admin";
+    if(ADMIN_PWD_HASH && sessionStorage.getItem(ADMIN_SESSION_KEY)!=="1"){ showAdminGate(); return; }
+    view="methods-admin"; methodsAdminAddOpen=false; paint();
   });
   const openPwdSetBtn = document.getElementById("openPwdSet");
   if(openPwdSetBtn) openPwdSetBtn.addEventListener("click", openPwdSetModal);
