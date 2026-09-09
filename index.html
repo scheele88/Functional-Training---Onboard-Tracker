@@ -411,6 +411,11 @@
       <div class="subtitle" id="pageSubtitle">Source: CL-D-1000-0001 Functional Training Plan for Olefins (Rev 1.1)</div>
     </div>
     <div class="header-actions">
+      <select id="progressScopeSelect" title="Which courses count toward every completion % section-wide — dashboard, People table, and Export Report">
+        <option value="probation">Probation progress (Ph.1+2)</option>
+        <option value="full">Full progress (all phases)</option>
+        <option value="test">Test methods only</option>
+      </select>
       <button class="btn small" id="openExportReport">Export report</button>
       <button class="btn small" id="openAdmin">Manage courses</button>
       <button class="btn small" id="openPwdSet" title="Set or change the admin password">🔒</button>
@@ -497,6 +502,7 @@
       <input type="checkbox" id="exportScopeRotated" style="width:16px;height:16px">
       Rotated members — active people with a recorded position change
     </label>
+    <div id="exportReportScopeNote" style="text-align:left;font-size:12.5px;color:var(--muted);margin:-4px 0 10px"></div>
     <div id="exportReportErr" class="adm-gate-err"></div>
     <div class="adm-gate-btns">
       <button class="btn-adm-gate-cancel" id="exportReportCancel">Cancel</button>
@@ -540,6 +546,7 @@
   let dashFilters = { position: "all", flag: "all", search: "", employment: "active", personStatus: "all" };
   let selectedPeopleIds = new Set();  // dashboard multi-select for the compare panel (not persisted)
   let drillFilter = null;             // "in_progress" | "overdue" | "passed" | null
+  let progressScope = "probation";    // "probation" | "full" | "test" — v3.5, not persisted, drives every section-wide % (tiles, position grid, People table, Export Report)
   let saveTimer = null;
   // Live, shared persistence via Supabase (see config.js for the project URL/anon key) — every
   // viewer's browser reads and writes the same real database, so unlike the old claude.ai Artifact
@@ -782,17 +789,40 @@
   // used) — NOT their original hire Start Date, which stays fixed as a tenure record and is shown
   // separately. Falls back to startDate for any record saved before this field existed.
   function positionRefDate(person){ return person.positionEffectiveDate || person.startDate || ""; }
-  function personCore(person){
-    return courseData(person.positionKey, positionRefDate(person)).filter(it=>it.phaseKey==="p1"||it.phaseKey==="p2");
+  // Progress "scope" (v3.5) — which subset of a person's curriculum counts toward their completion
+  // %, wherever that % is shown section-wide (dashboard tiles, per-position rollup, the People
+  // table's Progress column/flag, and the Export Report). Course-level `type` already distinguishes
+  // "Test Method (OJT)" courses from "Document" ones (see the admin panel's Type dropdown and the
+  // existing Test/Doc badge on each schedule row) — reused here rather than adding a new field.
+  const PROGRESS_SCOPES = {
+    probation: { label:"Probation progress (Ph.1+2)", short:"Probation (Ph.1+2)" },
+    full:      { label:"Full progress (test methods + non-test methods)", short:"Full plan (all phases)" },
+    test:      { label:"Test methods only", short:"Test methods only" },
+  };
+  const PROGRESS_SCOPE_VALUES = ["probation","full","test"];
+  function isTestMethodCourse(item){ return (item.type||"").indexOf("Test")===0; }
+  // The course set a given scope counts: "probation" = Phase 1+2 (unchanged default behavior),
+  // "full" = every phase, "test" = every Test-Method-type course across all phases (ignores the
+  // probation cutoff entirely — confirmed with the user as the intended reading).
+  function personCourseSet(person, scope){
+    const all = courseData(person.positionKey, positionRefDate(person));
+    if(scope==="test") return all.filter(isTestMethodCourse);
+    if(scope==="full") return all;
+    return all.filter(it=>it.phaseKey==="p1"||it.phaseKey==="p2");
   }
-  function personProgress(person){
-    const core = personCore(person);
+  function personCore(person){ return personCourseSet(person, "probation"); }
+  function personProgressScoped(person, scope){
+    const core = personCourseSet(person, scope);
     const counts = {passed:0, overdue:0, in_progress:0, upcoming:0, on_hold:0, unscheduled:0};
     core.forEach(it=>{ counts[computeStatus(it, itemState(person,it.id), positionRefDate(person))]++; });
     const total = core.length;
     const pct = total? Math.round(counts.passed/total*100) : 0;
     return Object.assign({total, pct}, counts);
   }
+  // Kept as the probation-scoped default — Status auto-detection (below) and the person page's own
+  // "Probation courses (Ph.1+2)" tile both intentionally stay pinned to probation regardless of
+  // whichever scope is currently selected section-wide.
+  function personProgress(person){ return personProgressScoped(person, "probation"); }
   // Per-person report/roster classification (added v3.3) — feeds both the People table's Status
   // column and the Export Report's Newcomers/Rotated scoping, so both always agree with each other.
   // Defaults to an auto-detected value (so nothing needs setting for anyone already in the tracker)
@@ -1082,10 +1112,12 @@
     if(status==="on_track") return RPT_COLOR.green;
     return RPT_COLOR.amber;
   }
-  // Derives each active person's report-relevant figures once (probation %/status/overdue count),
-  // shared by every scope builder below rather than recomputing per slide.
-  function rptPersonStats(p){
-    const pr = personProgress(p);
+  // Derives each active person's report-relevant figures once (completion %/status/overdue count,
+  // computed under whichever progress scope — Probation/Full/Test methods — is currently selected in
+  // the header), shared by every scope builder below rather than recomputing per slide. Who counts as
+  // a Newcomer/Rotation/Others (see resolvedPersonStatus) stays probation-based regardless of scope.
+  function rptPersonStats(p, scope){
+    const pr = personProgressScoped(p, scope);
     const status = pr.overdue>0 ? "overdue" : (pr.pct>=100 ? "complete" : "on_track");
     return { person:p, pct:pr.pct, overdueCount:pr.overdue, status };
   }
@@ -1195,9 +1227,10 @@
     }
   }
 
-  function rptBuildOverall(pres, active){
+  function rptBuildOverall(pres, active, scope){
     __pres_for_charttype = pres;
-    const stats = active.map(rptPersonStats);
+    const scopeShort = PROGRESS_SCOPES[scope].short;
+    const stats = active.map(p=>rptPersonStats(p, scope));
     const total = stats.length;
     const overdue = stats.filter(s=>s.status==="overdue").length;
     const onTrack = stats.filter(s=>s.status!=="overdue").length;
@@ -1211,12 +1244,12 @@
       return { label:POSITIONS[pk].label, headcount:mine.length, avgPct:avg, overdue:od };
     }).filter(r=>r.headcount>0);
 
-    // Overview dashboard — one page: KPI row + status-composition donut + probation-by-position bar.
+    // Overview dashboard — one page: KPI row + status-composition donut + completion-by-position bar.
     const s = pres.addSlide();
-    pbiHeader(s, "Overall Results", "Overall Results", `Olefins & UT Analyst Section — ${total} active people`);
+    pbiHeader(s, "Overall Results", "Overall Results", `Olefins & UT Analyst Section — ${total} active people · Progress basis: ${PROGRESS_SCOPES[scope].label}`);
     const rowY = pbiKpiRow(s, [
       { value:total, label:"Active people", accent:RPT_COLOR.teal },
-      { value:`${avgPct}%`, label:"Avg. probation completion", accent:RPT_COLOR.teal },
+      { value:`${avgPct}%`, label:`Avg. completion (${scopeShort})`, accent:RPT_COLOR.teal },
       { value:onTrack, label:"On track", accent:RPT_COLOR.green },
       { value:overdue, label:"Overdue", accent:RPT_COLOR.red },
     ]);
@@ -1225,9 +1258,9 @@
       ["Newcomer","Rotation","Others"], [statusCounts.newcomer, statusCounts.rotation, statusCounts.others],
       [RPT_COLOR.teal, RPT_COLOR.amber, RPT_COLOR.mutedLight], "active");
     const c2x = 0.45+cw+0.22;
-    const c2TopY = pbiCard(s, c2x, rowY, cw, rowH, "Avg. Probation Completion by Position");
+    const c2TopY = pbiCard(s, c2x, rowY, cw, rowH, `Avg. Completion by Position (${scopeShort})`);
     const ordered = byPos.slice().reverse(); // horizontal bar plots first category at the bottom
-    s.addChart(pres.ChartType.bar, [{ name:"Avg. Probation %", labels:ordered.map(r=>r.label), values:ordered.map(r=>r.avgPct) }], {
+    s.addChart(pres.ChartType.bar, [{ name:"Avg. Completion %", labels:ordered.map(r=>r.label), values:ordered.map(r=>r.avgPct) }], {
       x:c2x+0.22, y:c2TopY, w:cw-0.44, h:rowY+rowH-c2TopY-0.22, barDir:"bar",
       chartColors: ordered.map(r=>r.avgPct>=80?RPT_COLOR.green:(r.avgPct>=50?RPT_COLOR.amber:RPT_COLOR.red)), showLegend:false,
       showValue:true, dataLabelColor:RPT_COLOR.ink, dataLabelFontFace:RPT_FONT_BODY, dataLabelFontSize:9.5, dataLabelPosition:"outEnd", dataLabelFormatCode:'0"%"',
@@ -1238,43 +1271,46 @@
     pbiFooter(s);
 
     // Detail pages
-    pbiTableSlides(pres, "Position Breakdown", "Overall Results", null, [
+    pbiTableSlides(pres, "Position Breakdown", "Overall Results", `Progress basis: ${PROGRESS_SCOPES[scope].label}`, [
       { label:"Position", value:r=>r.label, w:5.5 },
       { label:"Headcount", value:r=>String(r.headcount), w:2.17, align:"center" },
-      { label:"Avg. Probation %", value:r=>`${r.avgPct}%`, w:2.17, align:"center", color:r=>r.avgPct>=80?RPT_COLOR.green:(r.avgPct>=50?RPT_COLOR.amber:RPT_COLOR.red), bold:()=>true },
+      { label:`Avg. ${scopeShort} %`, value:r=>`${r.avgPct}%`, w:2.17, align:"center", color:r=>r.avgPct>=80?RPT_COLOR.green:(r.avgPct>=50?RPT_COLOR.amber:RPT_COLOR.red), bold:()=>true },
       { label:"Overdue courses", value:r=>String(r.overdue), w:2.17, align:"center", color:r=>r.overdue>0?RPT_COLOR.red:RPT_COLOR.muted },
     ], byPos);
     const sorted = stats.slice().sort((a,b)=>POSITION_ORDER.indexOf(a.person.positionKey)-POSITION_ORDER.indexOf(b.person.positionKey) || (a.person.startDate||"").localeCompare(b.person.startDate||""));
-    pbiTableSlides(pres, "Active Roster", "Overall Results", null, [
+    pbiTableSlides(pres, "Active Roster", "Overall Results", `Progress basis: ${PROGRESS_SCOPES[scope].label}`, [
       { label:"Name", value:r=>r.person.name, w:3.0 },
       { label:"Position", value:r=>POSITIONS[r.person.positionKey].label, w:3.2 },
       { label:"Start date", value:r=>rptDate(r.person.startDate), w:1.9, align:"center" },
-      { label:"Probation %", value:r=>`${r.pct}%`, w:1.8, align:"center", color:r=>r.pct>=80?RPT_COLOR.green:(r.pct>=50?RPT_COLOR.amber:RPT_COLOR.red), bold:()=>true },
+      { label:`${scopeShort} %`, value:r=>`${r.pct}%`, w:1.8, align:"center", color:r=>r.pct>=80?RPT_COLOR.green:(r.pct>=50?RPT_COLOR.amber:RPT_COLOR.red), bold:()=>true },
       { label:"Status", value:r=>r.status==="overdue"?"Overdue":(r.status==="on_track"?"On track":"Complete"), w:2.53, align:"center", color:r=>rptStatusColor(r.status) },
     ], sorted);
   }
 
-  function rptBuildNewcomers(pres, active){
+  function rptBuildNewcomers(pres, active, scope){
     __pres_for_charttype = pres;
+    const scopeShort = PROGRESS_SCOPES[scope].short;
     // Scoped by the same resolvedPersonStatus() the People table's Status column shows — auto-detected
-    // from probation % unless a person's Status has been manually set, so the two always agree.
-    const newcomers = active.filter(p=>resolvedPersonStatus(p)==="newcomer").map(rptPersonStats)
+    // from probation % unless a person's Status has been manually set, so the two always agree; this
+    // membership stays probation-based regardless of the selected progress scope, which only changes
+    // how much completion each included person is shown to have.
+    const newcomers = active.filter(p=>resolvedPersonStatus(p)==="newcomer").map(p=>rptPersonStats(p, scope))
       .sort((a,b)=>(a.person.startDate||"").localeCompare(b.person.startDate||""));
     const overdue = newcomers.filter(s=>s.status==="overdue").length;
     const onTrack = newcomers.length - overdue;
     const avgPct = Math.round(newcomers.reduce((s,x)=>s+x.pct,0)/(newcomers.length||1));
 
     const s = pres.addSlide();
-    pbiHeader(s, "Newcomers", "Newcomers", `${newcomers.length} people still completing probation-critical training`);
+    pbiHeader(s, "Newcomers", "Newcomers", `${newcomers.length} people still completing probation-critical training · Progress basis: ${PROGRESS_SCOPES[scope].label}`);
     const rowY = pbiKpiRow(s, [
       { value:newcomers.length, label:"Newcomers (in training)", accent:RPT_COLOR.teal },
-      { value:`${avgPct}%`, label:"Avg. probation completion", accent:RPT_COLOR.teal },
+      { value:`${avgPct}%`, label:`Avg. completion (${scopeShort})`, accent:RPT_COLOR.teal },
       { value:overdue, label:"Overdue", accent:RPT_COLOR.red },
     ]);
     const rowH = 7.02 - rowY, cw = (12.43-0.22)/2;
     pbiDonutCard(s, 0.45, rowY, cw, rowH, "On Track vs. Overdue", ["On track","Overdue"], [onTrack, overdue], [RPT_COLOR.green, RPT_COLOR.red], "newcomers");
     const c2x = 0.45+cw+0.22;
-    const c2TopY = pbiCard(s, c2x, rowY, cw, rowH, "Newcomer Snapshot — Probation Completion");
+    const c2TopY = pbiCard(s, c2x, rowY, cw, rowH, `Newcomer Snapshot — ${scopeShort} Completion`);
     const previewRows = 7;
     const shown = newcomers.slice(0, previewRows).map(r=>({
       name:r.person.name, pct:r.pct,
@@ -1284,17 +1320,17 @@
     pbiPreviewList(s, c2x+0.25, c2TopY+0.06, cw-0.5, shown, Math.max(0, newcomers.length-previewRows), `+ ${Math.max(0, newcomers.length-previewRows)} more — see the Newcomer Roster page`);
     pbiFooter(s);
 
-    pbiTableSlides(pres, "Newcomer Roster", "Newcomers", null, [
+    pbiTableSlides(pres, "Newcomer Roster", "Newcomers", `Progress basis: ${PROGRESS_SCOPES[scope].label}`, [
       { label:"Name", value:r=>r.person.name, w:2.8 },
       { label:"Position", value:r=>POSITIONS[r.person.positionKey].label, w:3.0 },
       { label:"Start date", value:r=>rptDate(r.person.startDate), w:1.8, align:"center" },
-      { label:"Probation %", value:r=>`${r.pct}%`, w:1.7, align:"center", color:r=>r.pct>=80?RPT_COLOR.green:(r.pct>=50?RPT_COLOR.amber:RPT_COLOR.red), bold:()=>true },
+      { label:`${scopeShort} %`, value:r=>`${r.pct}%`, w:1.7, align:"center", color:r=>r.pct>=80?RPT_COLOR.green:(r.pct>=50?RPT_COLOR.amber:RPT_COLOR.red), bold:()=>true },
       { label:"Overdue courses", value:r=>String(r.overdueCount), w:1.6, align:"center", color:r=>r.overdueCount>0?RPT_COLOR.red:RPT_COLOR.muted },
       { label:"Status", value:r=>r.status==="overdue"?"Overdue":"On track", w:1.53, align:"center", color:r=>rptStatusColor(r.status) },
     ], newcomers);
   }
 
-  function rptBuildRotated(pres, active){
+  function rptBuildRotated(pres, active, scope){
     __pres_for_charttype = pres;
     // Scoped by resolvedPersonStatus() rather than a raw positionHistory check, so a person manually
     // flagged "Rotation" (e.g. a move that predates this tracker and was never logged via Change
@@ -1362,9 +1398,9 @@
     title.addText(`Long Son Petrochemicals Central Laboratory  •  Generated ${fmtDate(new Date())}`, { x:0.8, y:6.6, w:11.7, h:0.4, fontFace:RPT_FONT_BODY, fontSize:13, color:RPT_COLOR.muted });
 
     const active = Object.values(STATE.people).filter(isActive);
-    if(scopes.includes("overall")) rptBuildOverall(pres, active);
-    if(scopes.includes("newcomers")) rptBuildNewcomers(pres, active);
-    if(scopes.includes("rotated")) rptBuildRotated(pres, active);
+    if(scopes.includes("overall")) rptBuildOverall(pres, active, progressScope);
+    if(scopes.includes("newcomers")) rptBuildNewcomers(pres, active, progressScope);
+    if(scopes.includes("rotated")) rptBuildRotated(pres, active, progressScope);
 
     const dateStamp = toISO(new Date());
     return pres.writeFile({ fileName:`Olefins-UT-Training-Report-${dateStamp}.pptx` });
@@ -1372,6 +1408,8 @@
 
   function openExportReportModal(){
     document.getElementById("exportReportErr").textContent = "";
+    const noteEl = document.getElementById("exportReportScopeNote");
+    if(noteEl) noteEl.textContent = `Progress basis: ${PROGRESS_SCOPES[progressScope].label} — change it with the dropdown in the header before generating.`;
     document.getElementById("exportReportModal").hidden = false;
   }
   function closeExportReportModal(){
@@ -1419,16 +1457,17 @@
   function sectionSummary(){
     const people = Object.values(STATE.people).filter(isActive);
     let total=0, passed=0, overdue=0, inprog=0;
-    people.forEach(p=>{ const pr=personProgress(p); total+=pr.total; passed+=pr.passed; overdue+=pr.overdue; inprog+=pr.in_progress; });
+    people.forEach(p=>{ const pr=personProgressScoped(p, progressScope); total+=pr.total; passed+=pr.passed; overdue+=pr.overdue; inprog+=pr.in_progress; });
     const pct = total? Math.round(passed/total*100) : 0;
     return {peopleCount:people.length, total, passed, overdue, inprog, pct};
   }
 
-  // Course-level rows (Phase 1+2 only, matching the tiles) across every active person, for the tile drill-down.
+  // Course-level rows (matching the currently selected progress scope) across every active person,
+  // for the tile drill-down.
   function sectionCourseRows(statusKey){
     const rows = [];
     Object.entries(STATE.people).filter(([id,p])=>isActive(p)).forEach(([id,p])=>{
-      personCore(p).forEach(it=>{
+      personCourseSet(p, progressScope).forEach(it=>{
         const ist = itemState(p, it.id);
         const status = computeStatus(it, ist, positionRefDate(p));
         if(status===statusKey){
@@ -1468,7 +1507,7 @@
     <div class="tiles">
       <div class="tile ring-tile">
         ${ringSVG(s.pct,56,7,"var(--accent)")}
-        <div class="rt-text"><div class="label">Section-wide complete</div><div class="value">${s.pct}<span class="unit">%</span></div></div>
+        <div class="rt-text"><div class="label">Section-wide complete <span class="hint" style="font-weight:400">(${esc(PROGRESS_SCOPES[progressScope].short)})</span></div><div class="value">${s.pct}<span class="unit">%</span></div></div>
       </div>
       <div class="tile"><div class="label">Active people</div><div class="value">${s.peopleCount}</div></div>
       <div class="tile clickable progress${drillFilter==='in_progress'?' active':''}" data-drill="in_progress"><div class="label">In progress</div><div class="value">${s.inprog}</div></div>
@@ -1484,7 +1523,7 @@
       let pct = null;
       if(mine.length){
         let total=0, passed=0;
-        mine.forEach(p=>{ const pr=personProgress(p); total+=pr.total; passed+=pr.passed; });
+        mine.forEach(p=>{ const pr=personProgressScoped(p, progressScope); total+=pr.total; passed+=pr.passed; });
         pct = total? Math.round(passed/total*100) : 0;
       }
       const pc = posColor(pk);
@@ -1506,7 +1545,7 @@
     }
     if(dashFilters.flag!=="all"){
       people = people.filter(p=>{
-        const pr = personProgress(p);
+        const pr = personProgressScoped(p, progressScope);
         const flag = pr.overdue>0 ? "overdue" : (pr.total>0 && pr.passed===pr.total ? "complete" : "ontrack");
         return flag===dashFilters.flag;
       });
@@ -1620,9 +1659,9 @@
     return `<div class="gantt-scroll"><table class="people">
       <thead><tr>
         <th class="chk-col"><input type="checkbox" id="selectAllVisible" ${allSelected?'checked':''}></th>
-        <th>Name</th><th>Employee ID</th><th>Position</th><th>Start date</th><th>Status</th><th>Progress (Ph.1+2)</th><th>Flag</th><th></th></tr></thead>
+        <th>Name</th><th>Employee ID</th><th>Position</th><th>Start date</th><th>Status</th><th>Progress (${esc(PROGRESS_SCOPES[progressScope].short)})</th><th>Flag</th><th></th></tr></thead>
       <tbody>${people.map(p=>{
-        const pr = personProgress(p);
+        const pr = personProgressScoped(p, progressScope);
         const active = isActive(p);
         const flag = !active ? `<span class="flag-chip resigned">Left${p.endDate?' '+esc(fmtDate(parseISO(p.endDate))):''}</span>`
           : pr.overdue>0 ? `<span class="flag-chip overdue">${pr.overdue} overdue</span>`
@@ -2462,6 +2501,14 @@
   if(posChangeCancelBtn) posChangeCancelBtn.addEventListener("click", closePosChangeModal);
   const posChangeSaveBtn = document.getElementById("posChangeSave");
   if(posChangeSaveBtn) posChangeSaveBtn.addEventListener("click", savePosChange);
+  const progressScopeSelectEl = document.getElementById("progressScopeSelect");
+  if(progressScopeSelectEl){
+    progressScopeSelectEl.value = progressScope;
+    progressScopeSelectEl.addEventListener("change", ()=>{
+      progressScope = PROGRESS_SCOPE_VALUES.indexOf(progressScopeSelectEl.value)>=0 ? progressScopeSelectEl.value : "probation";
+      paint();
+    });
+  }
   const openExportReportBtn = document.getElementById("openExportReport");
   if(openExportReportBtn) openExportReportBtn.addEventListener("click", openExportReportModal);
   const exportReportCancelBtn = document.getElementById("exportReportCancel");

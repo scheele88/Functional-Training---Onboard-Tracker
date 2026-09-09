@@ -19,8 +19,8 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.4) version — see "Position changes / rotations", "Per-person Status", and "Export Report"
-  below for what's new.
+  (v3.5) version — see "Position changes / rotations", "Per-person Status", "Progress scope
+  (new)", and "Export Report" below for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -71,6 +71,31 @@ category.
 
 This Status is what the Export Report's Newcomers/Rotated sections use to decide who's included —
 see below.
+
+## Progress scope (new)
+
+There's now a **Progress** dropdown in the top-right header, next to "Export report". It decides
+which courses count toward *every* completion percentage shown across the app — the dashboard KPI
+tiles, the per-position average grid, the People table's Progress column and its "overdue"/"on
+track" flag (and the flag filter), and the Export Report's KPIs, charts and tables all follow it.
+Three choices:
+
+- **Probation progress (Ph.1+2)** — the default, unchanged from before: just the probation-window
+  courses (Phase 1 + Phase 2).
+- **Full progress (all phases)** — every course across the whole curriculum (Phase 1 through
+  Phase 4), test methods and documents alike.
+- **Test methods only** — every course across the whole curriculum whose Type is a Test Method
+  (OJT), i.e. the same "Test" vs "Doc" distinction already shown as a badge on each schedule row.
+  This one also spans the full curriculum, not just the probation window.
+
+It's a display-only choice — nothing is saved, and it resets to "Probation progress" on reload. It
+also doesn't touch a person's own page (which still shows both "Probation courses" and "Full
+training plan" side by side, as before) or the People table's multi-select comparison panel (same
+reason). And it doesn't change who counts as Newcomer/Rotation/Others — that classification always
+stays based on probation completion, regardless of what the dropdown is set to.
+
+When you open **Export report**, the dialog shows a one-line reminder of which basis is currently
+selected, so you can double-check before generating.
 
 ## Export Report (updated — now a Power BI–style dashboard)
 
@@ -139,7 +164,9 @@ I built and syntax-checked this app, and ran it through an automated test suite 
 Supabase connection (add a person, remove a person, set an admin password, verify the course
 dashboard renders, and — new for v3.1 — change a person's position and confirm the start date stays
 put, the position history logs correctly, and a shared course keeps its Passed status while a
-new-only course starts fresh) — everything passed. However, this sandbox's network access doesn't
+new-only course starts fresh; new for v3.5 — switch the Progress dropdown through all three scopes
+and confirm the People table's column header and each person's percentage change accordingly, and
+that the Export Report still generates correctly under a non-default scope) — everything passed. However, this sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
 confirm the 24 people and their Passed/Not Started course statuses look right, add a test person
