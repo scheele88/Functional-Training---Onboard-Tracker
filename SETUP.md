@@ -19,9 +19,9 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.6) version — see "Position changes / rotations", "Per-person Status", "Progress scope
-  (new)", "Export Report", and **"Test Methods — Competency & Re-evaluation Tracking (new)"** below
-  for what's new.
+  (v3.7) version — see "Position changes / rotations", "Per-person Status", "Progress scope
+  (new)", "Export Report", **"Test Methods — Competency & Re-evaluation Tracking (v3.6)"**, and
+  **"Re-evaluation tab, editable dates & Excel import (new, v3.7)"** below for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -130,7 +130,76 @@ are excluded from every section, same as the rest of the dashboard. The file dow
 `Olefins-UT-Training-Report-<date>.pptx` and is safe to re-run as often as you like since it always
 reflects whatever's on screen right now.
 
-## Test Methods — Competency & Re-evaluation Tracking (new, v3.6)
+## Re-evaluation tab, editable dates & Excel import (new, v3.7)
+
+Three changes, all based on your feedback after v3.6 shipped — no database schema change, so there's
+no new `migration_*.sql` file for this round.
+
+**1. Re-evaluation tracking is now Analyst-only.** You clarified that CL-D-1000-0010 competency
+re-evaluation only applies to the three Analyst roles (Gas / Oil / Utility) — not Section Manager,
+Supervisor (SS), or Lead/Senior Engineer. Everything below (the tabs, the Re-evaluation panel, the
+Excel import) only ever shows on an Analyst's own page; everyone else's page looks exactly like it
+did before v3.6 — just their course schedule, no tabs.
+
+**2. Each analyst's page is now two tabs, not one long page.** Previously "Test Methods —
+Competency & Re-evaluation" was appended below the course schedule on every page, and the header
+buttons (Export report / Manage courses / Manage test methods / 🔒 / the save indicator) showed on
+every page including a person's own — redundant, since they're already on the main dashboard. Now:
+
+- Those header buttons only show on the dashboard / admin screens. On an analyst's own page they're
+  hidden — the page just shows their name/position/status fields, then the tabs.
+- **"Planner / Schedule"** is the first tab and the default — this is the same course-schedule Gantt
+  view as before, unchanged.
+- **"Re-evaluation"** is the second tab — this is where the Test Methods panel now lives. Click it to
+  see/edit test-method assignments and evaluations for that person; the schedule table isn't rendered
+  while this tab is open (and vice versa), so switching tabs is instant.
+
+**3. Completed date is now directly editable, and Next Due follows automatically.** In the
+Re-evaluation tab's table, the "Last evaluated" column is now a date field you can click and change
+directly — no need to open "Log eval." for a simple date correction. Editing it updates that
+method's most recent evaluation record in place (creating a first, Pass-result record if the person
+had no history for that method yet) and recomputes "Next due" as Completed date + the method's
+re-evaluation frequency. If a Next Due date had previously come from an Excel import (see below)
+rather than being computed, editing the Completed date by hand clears that and goes back to the
+computed date — a manual edit always wins going forward.
+
+**4. Import from Excel, in the Re-evaluation tab.** A new **"Import from Excel…"** button opens a
+file picker for `.xlsx`/`.xls` files in the same format as the competency-evaluation export you
+attached as a reference — the parser was built directly against that file, not a guess:
+
+- It expects repeating blocks, one per person, each starting with a `Name:` cell (the value right
+  after it, or on the same cell as `Name: <name>`, is matched against that person's name in the
+  roster — case-insensitive, trimmed) followed by a course table with columns **No. / Course /
+  Description / Complete Date / Re-Training Date**. The small "Competency" summary table
+  (General/Functional rows) above each person's course table is recognized and skipped automatically
+  — it has no method-row data in it.
+- **The join key is the Description column**, not Course — it holds the CL-T-XXXX-XXXX Document No.
+  that matches this tracker's test-method catalog directly (the Course column's `Lab-xx-xx-xxx` codes
+  are a different, internal numbering and aren't used for matching).
+- **Dates are read as DD/MM/YY(YY)** — day-first, based on your sample file (several rows have a day
+  value over 12, which rules out month-first). If a Complete Date is present, it updates that
+  person+method's Completed date; if a Re-Training Date is also present in the same row, it's stored
+  as that evaluation's explicit next-due date (overriding the frequency-based calculation) — this
+  matters because your sample file's Re-Training Date is consistently one day before what
+  `Complete Date + frequency` would compute (e.g. a Complete Date of 22/07/25 with a 1-year frequency
+  computes to 22/07/26, but the file says 21/07/26) — read as "valid through the day before the next
+  anniversary." Importing preserves that exact date rather than silently overriding it with the
+  computed one.
+- **One file can cover one person or many** — every `Name:` block found is processed, each against
+  its own rows, in one pass.
+- After importing, a summary banner shows how many test-method records were updated and for how many
+  people, plus any names in the file that didn't match anyone in the roster and any Document No.s
+  that didn't match anything in the test-method catalog — so you can tell at a glance whether
+  something in the file needs a name spelled the same way as the roster, or a method added via
+  "Manage test methods" first.
+- A row with a Document No. but no recognizable Complete Date, or that appears before any `Name:`
+  cell has been seen, is skipped — nothing is guessed.
+
+This all runs entirely in your browser (via a small library, SheetJS, loaded the same way as the
+existing PowerPoint-export library) — the file never leaves your machine except to save the parsed
+results to the database, same as any other edit in the tracker.
+
+## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
 This is the same page as everything above — I originally built this as a separate app and separate
 database tables, then folded it into this tracker once it was clear that's how you wanted it used.
@@ -153,12 +222,14 @@ needing retraining — automatically, section-wide.
 - A new **"Test methods needing attention"** tile on the dashboard (overdue + failed-retrain +
   never-evaluated, active people only) — click it to filter the People table to just those people.
 - A new **Methods** column in the People table, showing each person's worst-case status.
-- A new **"Test Methods — Competency & Re-evaluation"** panel at the bottom of every person's own
-  page — tick which of the 179 methods they're expected to be competent in (search/filter the full
-  list, or view "Assigned only"), click **Log eval.** to record a date/type/result/evaluator/notes
-  for any assigned method, and click **History** to see every past evaluation for that method. This
-  is additive — nothing is overwritten, and the tracker always computes status from the most recent
-  entry.
+- A new **"Test Methods — Competency & Re-evaluation"** panel, in the **Re-evaluation tab** on each
+  Analyst's own page (see "Re-evaluation tab, editable dates & Excel import" below — as of v3.7 this
+  only shows for the three Analyst positions, not Section Manager/Supervisor/Lead/Senior Engineer) —
+  tick which of the 179 methods they're expected to be competent in (search/filter the full list, or
+  view "Assigned only"), click **Log eval.** to record a date/type/result/evaluator/notes for any
+  assigned method, edit the Completed date directly for a quick correction, or click **History** to
+  see every past evaluation for that method. This is additive — nothing is overwritten, and the
+  tracker always computes status from the most recent entry.
 - A new **"Manage test methods"** button in the header (next to "Manage courses", behind the same
   admin password) — edit each method's re-evaluation frequency, type, remarks, or active/inactive
   status, or add a custom method not in CL-D-1000-0010.
@@ -236,9 +307,17 @@ against known dates, the dashboard tile and its click-to-filter behavior, assign
 logging an evaluation from a person's page, the evaluation history log, editing a method's frequency
 in "Manage test methods" and confirming it round-trips and immediately updates that method's status
 on every assigned person, adding a custom method, and the admin password gate correctly routing to
-"Manage test methods" vs. "Manage courses" depending on which button was clicked) — everything
-passed, and I re-ran the full pre-v3.6 test suite afterward to confirm nothing already working (course
-schedules, position changes, Export Report, Progress scope) regressed. However, this sandbox's network access doesn't
+"Manage test methods" vs. "Manage courses" depending on which button was clicked; new for v3.7 —
+the header buttons correctly hide on every analyst's own page, the Planner/Schedule and
+Re-evaluation tabs render the right content and switch correctly, non-Analyst positions never show
+a tab bar or the Re-evaluation panel at all, editing the Completed date directly updates Next Due
+and clears a previously-imported override, and an Excel import against a synthetic file built in the
+same layout as your sample screenshot correctly updates multiple people's records in one pass,
+carries the imported Re-Training Date through as an explicit override, computes Next Due normally
+when a row has no Re-Training Date, and reports unmatched names/Document No.s rather than silently
+dropping them) — everything passed, and I re-ran the full pre-v3.7 test suite afterward to confirm
+nothing already working (course schedules, position changes, Export Report, Progress scope, the
+v3.6 Test Methods panel itself) regressed. However, this sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
 confirm the 24 people and their Passed/Not Started course statuses look right, add a test person
@@ -246,7 +325,10 @@ and refresh the page to confirm it's still there, then delete the test person. A
 the new Change Position flow once on a test person before relying on it for a real rotation. For
 v3.6, open "Manage test methods" and confirm all 179 methods and their frequencies look right, then
 open a test person's page, assign a method, log an evaluation, refresh the page and confirm it's
-still there.
+still there. For v3.7, open an Analyst's page and confirm the header buttons are gone and the two
+tabs work, try editing a Completed date directly, and try the Excel import on one of your own real
+export files (start with a copy covering just one or two people) to confirm the name/Document No.
+matching behaves as expected against your actual data before relying on it for a bulk update.
 
 ## Everyday use
 

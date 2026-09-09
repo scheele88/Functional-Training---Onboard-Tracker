@@ -6,6 +6,7 @@
 <title>Olefins Onboarding Tracker</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.1/dist/pptxgen.bundle.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="config.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
@@ -418,11 +419,11 @@
         <option value="full">Full progress (all phases)</option>
         <option value="test">Test methods only</option>
       </select>
-      <button class="btn small" id="openExportReport">Export report</button>
-      <button class="btn small" id="openAdmin">Manage courses</button>
-      <button class="btn small" id="openMethodsAdmin">Manage test methods</button>
-      <button class="btn small" id="openPwdSet" title="Set or change the admin password">🔒</button>
-      <span class="save-chip" id="saveChip" data-state="idle">Connecting…</span>
+      <button class="btn small dash-only-action" id="openExportReport">Export report</button>
+      <button class="btn small dash-only-action" id="openAdmin">Manage courses</button>
+      <button class="btn small dash-only-action" id="openMethodsAdmin">Manage test methods</button>
+      <button class="btn small dash-only-action" id="openPwdSet" title="Set or change the admin password">🔒</button>
+      <span class="save-chip dash-only-action" id="saveChip" data-state="idle">Connecting…</span>
     </div>
   </header>
 
@@ -552,7 +553,8 @@
   let pendingAdminView = "admin";     // which view the admin password gate opens into once unlocked — "admin" | "methods-admin"
   let methodsAdminSearch = "";        // v3.6 — "Manage test methods" search box
   let methodsAdminAddOpen = false;
-  let personMethodsUi = { search: "", statusFilter: "assigned", openEvalForm: null, openHistory: new Set() }; // v3.6 — per-person Test Methods panel state, reset when switching people
+  let personMethodsUi = { search: "", statusFilter: "assigned", openEvalForm: null, openHistory: new Set(), importMsg: "" }; // v3.6/3.7 — per-person Test Methods panel state (incl. Excel-import result banner), reset when switching people
+  let personTab = "schedule"; // v3.7 — "schedule" | "reeval", which tab a person's own page shows; reset when switching people
   let progressScope = "probation";    // "probation" | "full" | "test" — v3.5, not persisted, drives every section-wide % (tiles, position grid, People table, Export Report)
   let saveTimer = null;
   // Live, shared persistence via Supabase (see config.js for the project URL/anon key) — every
@@ -889,6 +891,10 @@
   const METHOD_STATUS_LABEL = { overdue:"Overdue", retrain:"Failed — retrain", due_first:"Never evaluated", due_soon:"Due soon", ok:"On track", na:"N/A" };
   const METHOD_STATUS_CHIP_CLASS = { overdue:"overdue", retrain:"retrain", due_first:"due-first", due_soon:"progress", ok:"ontrack", na:"none" };
   function methodCategory(id){ const m = /^CL-T-(\d)000-/.exec(id||""); return METHOD_CATEGORY_MAP[m&&m[1]] || "Other"; }
+  // Per the user: re-evaluation tracking (CL-D-1000-0010) only applies to the 3 Analyst positions —
+  // Section Manager/Supervisor/Lead/Senior Engineer are out of scope, so the Re-evaluation tab and
+  // any per-person method assignment are only ever shown for these three positions.
+  function isAnalystPosition(positionKey){ return positionKey==="gas" || positionKey==="oil" || positionKey==="utility"; }
   function addYears(dateStr, years){ const d = parseISO(dateStr); if(!d) return null; d.setFullYear(d.getFullYear()+years); return toISO(d); }
   function daysBetween(aISO, bISO){ const a = parseISO(aISO), b = parseISO(bISO); if(!a||!b) return null; return Math.round((b-a)/86400000); }
   function todayISO(){ return toISO(new Date()); }
@@ -905,7 +911,11 @@
     if(!latest) return { status: freqYears==null ? "na" : "due_first", nextDue:null, lastDate:null };
     if(latest.result === "Fail") return { status:"retrain", nextDue:null, lastDate:latest.date };
     if(freqYears==null) return { status:"na", nextDue:null, lastDate:latest.date };
-    const nextDue = addYears(latest.date, freqYears);
+    // v3.7 — an Excel import (see Re-evaluation tab) can carry an explicit next-due date straight from
+    // the source file (which doesn't always land exactly on lastDate + freqYears, e.g. "valid through
+    // the day before the Nth anniversary") — honor it over the computed date when present. A manual
+    // edit of the Completed date clears this override so the date goes back to being freq-computed.
+    const nextDue = latest.nextDueOverride || addYears(latest.date, freqYears);
     const days = daysBetween(todayISO(), nextDue);
     const status = days<0 ? "overdue" : (days<=METHOD_DUE_SOON_DAYS ? "due_soon" : "ok");
     return { status, nextDue, lastDate:latest.date, daysUntil:days };
@@ -956,6 +966,26 @@
     });
     c.attention = c.overdue + c.retrain + c.due_first;
     return c;
+  }
+  // v3.7 — the Re-evaluation tab's "Last evaluated" cell is directly editable (per the user: "The
+  // completed date can be edited manually"), rather than only settable through the "Log eval." popup.
+  // A manual edit updates the most recent history entry's date in place (creating a first Pass entry
+  // if none exists yet) and clears any nextDueOverride on it, so Next Due goes back to being computed
+  // from Completed date + the method's frequency until a fresh Excel import supplies a new override.
+  function setMethodLastEvaluatedDate(person, methodId, dateISO){
+    if(!person.methods) person.methods = {};
+    if(!person.methods[methodId]) person.methods[methodId] = { assigned:true, history:[] };
+    const pm = person.methods[methodId];
+    pm.assigned = true;
+    if(!pm.history) pm.history = [];
+    const latest = latestMethodEval(pm.history);
+    if(latest){
+      latest.date = dateISO;
+      delete latest.nextDueOverride;
+    } else {
+      const m = STATE.methods[methodId] || {};
+      pm.history.push({ date: dateISO, evalType: m.reeval_type || "", result: "Pass", evaluator: "", notes: "" });
+    }
   }
   function methodRow(m){
     return { id:m.id, name:m.name||"", classroom: m.classroom!==false, training_type: m.training_type||null, freq_years: (m.freq_years===""||m.freq_years==null)?null:Number(m.freq_years), reeval_type: m.reeval_type||null, remarks: m.remarks||"", active: m.active!==false };
@@ -2178,6 +2208,43 @@
     const meta = courseMeta(person.positionKey, positionRefDate(person));
     const pr = personProgress(person);
     const full = personFull(person);
+    // v3.7 — re-evaluation tracking (CL-D-1000-0010) only applies to the 3 Analyst positions, so the
+    // Planner/Schedule vs. Re-evaluation tab split only shows for analysts; everyone else just sees
+    // their schedule, same as before v3.7.
+    const analyst = isAnalystPosition(person.positionKey);
+    const activeTab = analyst ? personTab : "schedule";
+    const tabsHtml = analyst ? `
+        <div class="admin-tabs">
+          <button class="admin-tab${activeTab==='schedule'?' active':''}" data-person-tab="schedule">Planner / Schedule</button>
+          <button class="admin-tab${activeTab==='reeval'?' active':''}" data-person-tab="reeval">Re-evaluation</button>
+        </div>` : '';
+    const scheduleHtml = activeTab==="schedule" ? `
+        <div class="panel-head">
+          <h2>Full Training Schedule — 3 Phases</h2>
+          <div class="meta">Phase 1 Orientation: ${meta.p1Count} items / ${meta.p1Hours}h &nbsp;·&nbsp; Phase 2 Critical Qualification: ${meta.p2Count} items / ${meta.p2Hours}h over ${meta.weeksP2} weeks (+ 1 evaluation/buffer week) &nbsp;·&nbsp; Phase 3 Continuing Plan: ${meta.p4Count} items / ${meta.p4Hours}h, indicative pacing within 6 months of probation ending</div>
+          <div class="meta cap-note">${esc(probationCapNote(meta))}</div>
+        </div>
+        <div class="legend">
+          <span class="item"><span class="swatch" style="background:var(--passed)"></span>Completed</span>
+          <span class="item"><span class="swatch" style="background:var(--progress)"></span>In progress</span>
+          <span class="item"><span class="swatch" style="background:var(--overdue)"></span>Overdue</span>
+          <span class="item"><span class="swatch" style="background:var(--accent);opacity:.55"></span>Upcoming / on track</span>
+          <span class="item"><span class="swatch" style="background:var(--hold)"></span>On hold</span>
+          <span class="item"><span class="swatch" style="background:transparent;border-right:2px dashed var(--overdue);border-radius:0;width:0"></span>Dashed red line (W${PROBATION_CAP_WEEKS}) = ~2-month (60-day) probation cap reference</span>
+          <span class="item">Colored code-stripe &amp; P1/P2/P3 chip = phase &nbsp;·&nbsp; Short bar = Phase 1–2, exact week &nbsp;·&nbsp; Wide hatched bar = Phase 3, indicative month &nbsp;·&nbsp; Last column = evaluation &amp; buffer</span>
+        </div>
+        <div class="gantt-scroll">
+          <table class="gantt">
+            <thead><tr>
+              <th class="code">Code</th>
+              <th class="course">Course</th>
+              <th style="width:132px">Status</th>
+              <th style="width:118px">Target date</th>
+              ${weekHeaderCells(meta.totalWeeks)}
+            </tr></thead>
+            <tbody>${renderGanttRows(person, items, meta, meta.totalWeeks)}</tbody>
+          </table>
+        </div>` : '';
     return `
       <div class="backbar"><button class="link" id="backToDash">&larr; All people</button>${isActive(person)?'':`<span class="flag-chip resigned">Left${person.endDate?' '+esc(fmtDate(parseISO(person.endDate))):''} — excluded from section statistics</span>`}</div>
       <div class="tiles">
@@ -2234,34 +2301,10 @@
           ${isActive(person) ? '' : `<label for="endDateInput">Last working day:</label>${dateEditHtml('id="endDateInput"', person.endDate||"")}`}
           <span class="hint">${isActive(person) ? 'Counted in section-wide statistics' : 'Excluded from section-wide statistics and position rollups — still visible in the People table via the Employment filter'}</span>
         </div>
-        <div class="panel-head">
-          <h2>Full Training Schedule — 3 Phases</h2>
-          <div class="meta">Phase 1 Orientation: ${meta.p1Count} items / ${meta.p1Hours}h &nbsp;·&nbsp; Phase 2 Critical Qualification: ${meta.p2Count} items / ${meta.p2Hours}h over ${meta.weeksP2} weeks (+ 1 evaluation/buffer week) &nbsp;·&nbsp; Phase 3 Continuing Plan: ${meta.p4Count} items / ${meta.p4Hours}h, indicative pacing within 6 months of probation ending</div>
-          <div class="meta cap-note">${esc(probationCapNote(meta))}</div>
-        </div>
-        <div class="legend">
-          <span class="item"><span class="swatch" style="background:var(--passed)"></span>Completed</span>
-          <span class="item"><span class="swatch" style="background:var(--progress)"></span>In progress</span>
-          <span class="item"><span class="swatch" style="background:var(--overdue)"></span>Overdue</span>
-          <span class="item"><span class="swatch" style="background:var(--accent);opacity:.55"></span>Upcoming / on track</span>
-          <span class="item"><span class="swatch" style="background:var(--hold)"></span>On hold</span>
-          <span class="item"><span class="swatch" style="background:transparent;border-right:2px dashed var(--overdue);border-radius:0;width:0"></span>Dashed red line (W${PROBATION_CAP_WEEKS}) = ~2-month (60-day) probation cap reference</span>
-          <span class="item">Colored code-stripe &amp; P1/P2/P3 chip = phase &nbsp;·&nbsp; Short bar = Phase 1–2, exact week &nbsp;·&nbsp; Wide hatched bar = Phase 3, indicative month &nbsp;·&nbsp; Last column = evaluation &amp; buffer</span>
-        </div>
-        <div class="gantt-scroll">
-          <table class="gantt">
-            <thead><tr>
-              <th class="code">Code</th>
-              <th class="course">Course</th>
-              <th style="width:132px">Status</th>
-              <th style="width:118px">Target date</th>
-              ${weekHeaderCells(meta.totalWeeks)}
-            </tr></thead>
-            <tbody>${renderGanttRows(person, items, meta, meta.totalWeeks)}</tbody>
-          </table>
-        </div>
+        ${tabsHtml}
+        ${scheduleHtml}
       </section>
-      ${renderPersonMethodsSection(person)}
+      ${activeTab==="reeval" ? renderPersonMethodsSection(person) : ''}
     `;
   }
 
@@ -2297,7 +2340,7 @@
         <td class="mono" style="font-size:11px">${esc(r.id)}${inactive?' <span class="hint">(inactive)</span>':''}</td>
         <td>${esc(r.method.name||"")}</td>
         <td>${freqLabel}</td>
-        <td class="mono">${st.lastDate?esc(fmtDate(parseISO(st.lastDate))):'—'}</td>
+        <td class="mono"><input type="date" class="admin-input" style="width:130px" data-method-lastdate="${esc(r.id)}" value="${st.lastDate?esc(st.lastDate):''}" title="Edit the completed / last-evaluated date directly"></td>
         <td class="mono">${st.nextDue?esc(fmtDate(parseISO(st.nextDue))):'—'}</td>
         <td><span class="flag-chip ${METHOD_STATUS_CHIP_CLASS[st.status]}">${esc(METHOD_STATUS_LABEL[st.status])}</span></td>
         <td style="white-space:nowrap">
@@ -2342,13 +2385,116 @@
             <option value="due_first" ${ui.statusFilter==='due_first'?'selected':''}>Never evaluated</option>
             <option value="due_soon" ${ui.statusFilter==='due_soon'?'selected':''}>Due soon</option>
           </select>
-          <span class="hint">Tick to assign a method to this person; untick to remove it from their qualification list (history is kept). "Failed — retrain" overrides the date-based status until a new, passing evaluation is logged.</span>
+          <button class="btn small" id="openMethodsImport">Import from Excel…</button>
+          <input type="file" id="methodsImportFile" accept=".xlsx,.xls" style="display:none">
+          <span class="hint">Tick to assign a method to this person; untick to remove it from their qualification list (history is kept). "Failed — retrain" overrides the date-based status until a new, passing evaluation is logged. Completed date can be edited directly in the table below.</span>
         </div>
+        ${ui.importMsg ? `<div class="hint" id="methodsImportMsg" style="white-space:pre-line;padding:8px 12px;margin:0 0 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2, rgba(0,0,0,.03))">${esc(ui.importMsg)}</div>` : ''}
         <div class="gantt-scroll"><table class="people admin-table">
           <thead><tr><th style="width:34px"></th><th>Doc No.</th><th>Test Method Name</th><th>Freq.</th><th>Last evaluated</th><th>Next due</th><th>Status</th><th></th></tr></thead>
           <tbody>${bodyRows || `<tr><td colspan="8" class="empty-state">No methods match this filter.</td></tr>`}</tbody>
         </table></div>
       </section>`;
+  }
+
+  // ---------- v3.7: Excel import for Re-evaluation data (Complete Date / Re-Training Date) ----------
+  // Format assumed from the user's sample export: repeating blocks per person of "Name: <name>" /
+  // "Position: <label>" header rows, a small Competency summary table (skipped — no CL-T doc-no cells
+  // in it), then a course table with columns No. | Course | Description | Complete Date |
+  // Re-Training Date, where "Description" holds the CL-T-XXXX-XXXX Document No. that matches
+  // onb_methods.id directly. Dates are DD/MM/YY[YY] (confirmed day-first: sample rows have day values
+  // > 12). A file can contain one or many people's blocks, across one or many sheets.
+  function parseImportDateCell(v){
+    if(v==null || v==="") return null;
+    const s = String(v).trim();
+    const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+    if(!m) return null;
+    let dd = Number(m[1]), mm = Number(m[2]), yy = Number(m[3]);
+    if(yy < 100) yy += 2000;
+    if(mm<1 || mm>12 || dd<1 || dd>31) return null;
+    return toISO(new Date(yy, mm-1, dd));
+  }
+  function findPersonByName(name){
+    const q = String(name||"").trim().toLowerCase();
+    if(!q) return null;
+    return Object.values(STATE.people).find(p=> (p.name||"").trim().toLowerCase()===q) || null;
+  }
+  function applyMethodsImportRow(person, methodId, completeISO, retrainISO){
+    if(!person.methods) person.methods = {};
+    if(!person.methods[methodId]) person.methods[methodId] = { assigned:true, history:[] };
+    const pm = person.methods[methodId];
+    pm.assigned = true;
+    if(!pm.history) pm.history = [];
+    const latest = latestMethodEval(pm.history);
+    if(latest){
+      latest.date = completeISO;
+      if(retrainISO) latest.nextDueOverride = retrainISO; else delete latest.nextDueOverride;
+    } else {
+      const m = STATE.methods[methodId] || {};
+      const entry = { date: completeISO, evalType: m.reeval_type || "", result: "Pass", evaluator: "Excel import", notes: "Imported "+todayISO() };
+      if(retrainISO) entry.nextDueOverride = retrainISO;
+      pm.history.push(entry);
+    }
+  }
+  function parseMethodsImportWorkbook(wb){
+    const result = { updated: [], unmatchedPeople: new Set(), unmatchedMethods: new Set(), rows: 0 };
+    wb.SheetNames.forEach(sheetName=>{
+      const sheet = wb.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header:1, raw:false, defval:"" });
+      let currentName = null;
+      rows.forEach(row=>{
+        const cells = (row||[]).map(c=>String(c==null?"":c).trim());
+        // Look for a "Name:" label, either as one combined cell or split across two cells — resets
+        // which person subsequent data rows (until the next "Name:") are attributed to.
+        for(let i=0;i<cells.length;i++){
+          const c = cells[i];
+          const inlineMatch = c.match(/^name\s*:\s*(.+)$/i);
+          if(inlineMatch && inlineMatch[1]){ currentName = inlineMatch[1].trim(); break; }
+          if(/^name\s*:?$/i.test(c) && cells[i+1]){ currentName = cells[i+1]; break; }
+        }
+        // A CL-T-XXXX-XXXX Document No. cell marks a data row for one test method; the small
+        // Competency summary table (General/Functional) has no such cell and is skipped naturally.
+        const docCell = cells.find(c=>/^CL-T-\d{4}-\d{4}$/i.test(c));
+        if(!docCell) return;
+        result.rows++;
+        if(!currentName) return; // no person context yet — can't attribute this row
+        const dates = cells.map(parseImportDateCell).filter(Boolean);
+        const completeISO = dates[0] || null;
+        const retrainISO = dates[1] || null;
+        if(!completeISO) return; // nothing to import for this row
+        const person = findPersonByName(currentName);
+        if(!person){ result.unmatchedPeople.add(currentName); return; }
+        const methodId = Object.keys(STATE.methods).find(id=>id.toLowerCase()===docCell.toLowerCase()) || null;
+        if(!methodId){ result.unmatchedMethods.add(docCell); return; }
+        applyMethodsImportRow(person, methodId, completeISO, retrainISO);
+        result.updated.push({ person: person.name, methodId, completeISO, retrainISO });
+      });
+    });
+    return result;
+  }
+  function handleMethodsImportFile(file){
+    const reader = new FileReader();
+    reader.onload = (e)=>{
+      try{
+        const data = new Uint8Array(e.target.result);
+        const wb = XLSX.read(data, { type:"array" });
+        const result = parseMethodsImportWorkbook(wb);
+        const byPerson = {};
+        result.updated.forEach(u=>{ byPerson[u.person] = (byPerson[u.person]||0) + 1; });
+        const peopleCount = Object.keys(byPerson).length;
+        let msg = `Import from "${file.name}": ${result.updated.length} test-method record(s) updated across ${peopleCount} ${peopleCount===1?'person':'people'}.`;
+        if(result.unmatchedPeople.size) msg += `\nName(s) not found in the roster: ${Array.from(result.unmatchedPeople).join(", ")}.`;
+        if(result.unmatchedMethods.size) msg += `\nDocument No.(s) not found in the test-method catalog: ${Array.from(result.unmatchedMethods).join(", ")}.`;
+        if(!result.updated.length && !result.unmatchedPeople.size && !result.unmatchedMethods.size) msg += `\nNo "Name:" + CL-T-xxxx-xxxx rows were recognized — check the file matches the expected export format.`;
+        personMethodsUi.importMsg = msg;
+        if(result.updated.length) scheduleSave();
+        paint();
+      } catch(err){
+        personMethodsUi.importMsg = `Could not read "${file.name}": ${err && err.message ? err.message : err}`;
+        paint();
+      }
+    };
+    reader.readAsArrayBuffer(file);
   }
 
   // ---------- paint / handlers ----------
@@ -2376,6 +2522,9 @@
   function paint(){
     const wrap = document.querySelector(".wrap");
     wrap.classList.toggle("view-person", view==="person");
+    // v3.7 — Export report / Manage courses / Manage test methods / 🔒 / save chip are redundant on a
+    // person's own page (already reachable from the dashboard) — hide them there per the user's request.
+    document.querySelectorAll(".dash-only-action").forEach(el=>{ el.style.display = (view==="person") ? "none" : ""; });
     if(view==="person" && STATE.people[selectedPersonId]){
       const p = STATE.people[selectedPersonId];
       const meta = courseMeta(p.positionKey, positionRefDate(p));
@@ -2457,7 +2606,8 @@
       root.querySelectorAll("td.name[data-open]").forEach(td=>{
         td.addEventListener("click", ()=>{
           selectedPersonId = td.getAttribute("data-open"); view="person";
-          personMethodsUi = { search: "", statusFilter: "assigned", openEvalForm: null, openHistory: new Set() };
+          personTab = "schedule";
+          personMethodsUi = { search: "", statusFilter: "assigned", openEvalForm: null, openHistory: new Set(), importMsg: "" };
           paint();
         });
       });
@@ -2705,6 +2855,13 @@
     } else {
       const backBtn = document.getElementById("backToDash");
       if(backBtn) backBtn.addEventListener("click", ()=>{ view="dashboard"; removeConfirmId=null; paint(); });
+      // v3.7 — Planner/Schedule vs. Re-evaluation tabs (analyst positions only)
+      root.querySelectorAll("[data-person-tab]").forEach(btn=>{
+        btn.addEventListener("click", ()=>{
+          personTab = btn.getAttribute("data-person-tab");
+          paint();
+        });
+      });
       const startInput = document.getElementById("startDateInput");
       if(startInput){
         startInput.addEventListener("change", ()=>{
@@ -2810,6 +2967,26 @@
       });
       const methodStatusFilterEl = document.getElementById("personMethodStatusFilter");
       if(methodStatusFilterEl) methodStatusFilterEl.addEventListener("change", ()=>{ personMethodsUi.statusFilter = methodStatusFilterEl.value; paint(); });
+      // v3.7 — Completed / "Last evaluated" date, edited directly in the table
+      root.querySelectorAll("[data-method-lastdate]").forEach(inp=>{
+        inp.addEventListener("change", ()=>{
+          const person = STATE.people[selectedPersonId]; if(!person) return;
+          const mid = inp.getAttribute("data-method-lastdate");
+          if(!inp.value) return; // don't clear an evaluation date by blanking the field
+          setMethodLastEvaluatedDate(person, mid, inp.value);
+          scheduleSave();
+          paint();
+        });
+      });
+      // v3.7 — Excel import (Complete Date / Re-Training Date, one or many people per file)
+      const openMethodsImportBtn = document.getElementById("openMethodsImport");
+      const methodsImportFileInput = document.getElementById("methodsImportFile");
+      if(openMethodsImportBtn && methodsImportFileInput) openMethodsImportBtn.addEventListener("click", ()=>{ methodsImportFileInput.click(); });
+      if(methodsImportFileInput) methodsImportFileInput.addEventListener("change", ()=>{
+        const file = methodsImportFileInput.files && methodsImportFileInput.files[0];
+        if(file) handleMethodsImportFile(file);
+        methodsImportFileInput.value = "";
+      });
       root.querySelectorAll("[data-method-assign]").forEach(chk=>{
         chk.addEventListener("change", ()=>{
           const person = STATE.people[selectedPersonId]; if(!person) return;
