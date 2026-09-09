@@ -946,26 +946,25 @@
     });
     return set;
   }
-  function allCurriculumMethodCodes(){
-    const union = new Set();
-    POSITION_ORDER.forEach(pk=>{ curriculumMethodCodes(pk).forEach(c=>union.add(c)); });
-    return union;
-  }
-  // A method is "not required for this position" only when it's tied to some OTHER position's
-  // curriculum and not this one — the union of all 6 curricula's Test-Method(OJT) codes only covers
-  // 92 of the 179 methods (mostly the 2000/3000/4000-series ones tied to an Analyst curriculum); the
-  // other 87 (largely 5000/6000-series Polymer/Film & Mechanical tests) aren't tied to any position's
-  // onboarding curriculum at all, so for those there's no curriculum signal to judge by and they're
-  // always treated as relevant, exactly as before this fix.
+  // v3.10 — a method is "not required for this position" whenever it's simply not part of that
+  // position's own curriculum, full stop — not only when it's tied to some OTHER Olefins position's
+  // curriculum. The v3.9 version of this check treated the 87 methods outside all 6 Olefins curricula
+  // (mostly 5000/6000-series Polymer/Film & Mechanical tests) as "no curriculum signal, so always
+  // relevant" — but the user confirmed directly (Nguyen Dinh Vinh/Van Minh Tien still showing overdue
+  // warnings for CL-T-5000/6000 methods) that these are Polyolefins-section methods, not Olefins ones:
+  // CL-D-1000-0010 is a lab-wide list spanning multiple sections, and a method absent from every one of
+  // the 6 Olefins curricula isn't an "uncovered" Olefins method needing a fallback — it's simply not an
+  // Olefins-section method at all, so it should never count as a warning for anyone in this Olefins-only
+  // tracker, regardless of which position holds it.
   function methodOutsideCurrentCurriculum(person, methodId){
     const norm = String(methodId||"").toLowerCase();
-    if(curriculumMethodCodes(person.positionKey).has(norm)) return false;
-    if(!allCurriculumMethodCodes().has(norm)) return false;
-    return true;
+    return !curriculumMethodCodes(person.positionKey).has(norm);
   }
   // Which position's curriculum a method actually belongs to, for the badge — checked against the 4
   // positions with a tight, meaningful method set (SS and the Engineer roles cover nearly everything,
-  // so naming them here would never be useful context for "where does this really belong").
+  // so naming them here would never be useful context for "where does this really belong"). Empty
+  // means the method isn't part of any of the 6 Olefins curricula at all — a Polyolefins/other-section
+  // method per CL-D-1000-0010's lab-wide scope, not just "belongs to a different Olefins position."
   function curriculumOwnerLabelFor(methodId){
     const norm = String(methodId||"").toLowerCase();
     for(const pk of ["gas","oil","utility","sm"]){
@@ -2423,7 +2422,7 @@
         <td>${freqLabel}</td>
         <td class="mono"><input type="date" class="admin-input" style="width:130px" data-method-lastdate="${esc(r.id)}" value="${st.lastDate?esc(st.lastDate):''}" title="Edit the completed / last-evaluated date directly"></td>
         <td class="mono">${st.nextDue?esc(fmtDate(parseISO(st.nextDue))):'—'}</td>
-        <td><span class="flag-chip ${METHOD_STATUS_CHIP_CLASS[st.status]}">${esc(METHOD_STATUS_LABEL[st.status])}</span>${r.stale?` <span class="hint" style="font-size:11px" title="Not part of ${esc(POSITIONS[person.positionKey].label)}'s curriculum — doesn't count toward the dashboard tile or the People table's Methods column">not required for current position${curriculumOwnerLabelFor(r.id)?' (belongs to '+esc(curriculumOwnerLabelFor(r.id))+')':''}</span>`:''}</td>
+        <td><span class="flag-chip ${METHOD_STATUS_CHIP_CLASS[st.status]}">${esc(METHOD_STATUS_LABEL[st.status])}</span>${r.stale?` <span class="hint" style="font-size:11px" title="Not part of ${esc(POSITIONS[person.positionKey].label)}'s curriculum — doesn't count toward the dashboard tile or the People table's Methods column">not required for current position${curriculumOwnerLabelFor(r.id)?' (belongs to '+esc(curriculumOwnerLabelFor(r.id))+')':' (not an Olefins-section method — belongs to another section, e.g. Polyolefins)'}</span>`:''}</td>
         <td style="white-space:nowrap">
           ${r.assigned?`<button class="btn small" data-method-log="${esc(r.id)}">Log eval.</button>`:''}
           ${hist.length?`<button class="btn small" data-method-hist="${esc(r.id)}">${histOpen?'Hide':'History ('+hist.length+')'}</button>`:''}

@@ -19,12 +19,13 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.9) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
+  (v3.10) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
   "Export Report", **"Test Methods — Competency & Re-evaluation Tracking (v3.6)"**, **"Re-evaluation
   tab, editable dates & Excel import (new, v3.7)"**, **"Test methods now scope to your current
-  position, and Excel import now updates the Planner/Schedule tab too (v3.8)"**, and **"Test-method
+  position, and Excel import now updates the Planner/Schedule tab too (v3.8)"**, **"Test-method
   relevance now uses your real curriculum data, Excel import now matches on either column, and the
-  Flag/Methods columns are merged (v3.9)"** below for what's new.
+  Flag/Methods columns are merged (v3.9)"**, and **"Test-method relevance now also excludes
+  Polyolefins-section methods entirely (v3.10)"** below for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -322,6 +323,29 @@ priority over a merely-overdue course, since a failed evaluation is the more ser
 Flag filter dropdown in the People table's filter bar now offers the same three merged buckets:
 **Overdue / failed–retrain**, **Due soon / never evaluated**, and **On track / complete**.
 
+## Test-method relevance now also excludes Polyolefins-section methods entirely (v3.10)
+
+You reported that Nguyen Dinh Vinh and Van Minh Tien were still showing overdue warnings after v3.9,
+this time for `CL-T-5000-xxx`/`CL-T-6000-xxx` methods — which you confirmed are Polyolefins-section
+methods, not Olefins ones, and don't belong to their current positions (Gas and Oil analyst).
+
+You were right, and the gap was narrower than v3.9's fix covered. CL-D-1000-0010 is a lab-wide list
+spanning multiple sections, not just Olefins — and v3.9's curriculum check only excluded a method when
+it belonged to a *different Olefins position's* curriculum (e.g. an Oil method on a Gas person). A
+method that isn't tied to *any* of the 6 Olefins curricula fell back to "no curriculum signal, so
+count it as relevant" — which was the right call for methods genuinely missing curriculum coverage,
+but wrong for methods that are simply out of scope for the Olefins section entirely, like the
+5000/6000-series ones. Checked directly against your curriculum data: zero of the 179 methods in the
+5000/6000 range are referenced by any of the 6 Olefins curricula, confirming these are Polyolefins
+(or other-section) methods with no Olefins relevance at all, exactly as you said.
+
+Fixed by dropping that fallback: a method now reads as relevant only when it's part of the person's
+own current position's curriculum — nothing else falls back to "count it anyway." A method excluded
+this way still shows on the person's own Re-evaluation tab with its true status, now labeled "not
+required for current position (not an Olefins-section method — belongs to another section, e.g.
+Polyolefins)" when it isn't part of any Olefins curriculum at all (vs. naming the specific Olefins
+position it belongs to, when it is).
+
 ## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
 This is the same page as everything above — I originally built this as a separate app and separate
@@ -461,7 +485,15 @@ once every course and method warning is resolved, the right worst-first text oth
 test suite afterward (course schedules, position changes, Export Report, Progress scope, the v3.6
 Test Methods panel, the v3.7 tab/date-edit behavior, the v3.7.1 import-bugfix suite against your real
 file, and the v3.8 suite, the latter two updated where they exercised the exact behavior v3.9 changed
-on purpose) to confirm nothing else regressed. However, this sandbox's network access doesn't
+on purpose) to confirm nothing else regressed; and new for v3.10 — a mocked Gas analyst and a mocked
+Oil analyst, each assigned CL-T-5000/6000-series methods (confirmed to be referenced by none of the 6
+Olefins curricula) with real overdue evaluation history, both correctly read "not required for current
+position" everywhere — the dashboard tile, the combined Flag, and the panel meta line — while a
+genuinely curriculum-matched method for the same person still counts normally; the full pre-existing
+suite (including the v3.9 suite, whose badge-status fixture was updated to use only genuine
+Gas-curriculum method codes since it had been relying on 5000-series codes as a "no curriculum ties to
+anyone" stand-in that v3.10 correctly retires) was re-run afterward and confirmed to still pass.
+However, this sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
 confirm the 24 people and their Passed/Not Started course statuses look right, add a test person
@@ -483,7 +515,10 @@ none of them have a logged Position History; re-run your real training-report ex
 Import button and spot-check that a course like `CL-T-4000-0006` that was previously stuck at "Not
 Started"/"OVERDUE" on the Planner/Schedule tab now shows Passed with the right completion date; and
 take a look at the People table's Flag column to confirm it now reads as one clear signal per person
-instead of two.
+instead of two. For v3.10, check Nguyen Dinh Vinh and Van Minh Tien's own pages and confirm their
+`CL-T-5000-xxx`/`CL-T-6000-xxx` (Polyolefins-section) methods now read "not required for current
+position" and no longer drive the dashboard tile or their People-table Flag, and spot-check a few
+other Gas/Oil/Utility analysts with older evaluation history for the same pattern.
 
 ## Everyday use
 
