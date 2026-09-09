@@ -923,28 +923,55 @@
     const status = days<0 ? "overdue" : (days<=METHOD_DUE_SOON_DAYS ? "due_soon" : "ok");
     return { status, nextDue, lastDate:latest.date, daysUntil:days };
   }
-  // A method's most recent evaluation predates the person's CURRENT position when they've rotated
-  // (positionHistory non-empty) and that evaluation happened before their current position's
-  // effective date — i.e. it was logged while they held a different role. Per the user: someone who
-  // rotated (e.g. Oil → Gas) shouldn't keep showing "Overdue" warnings for methods that were only
-  // ever relevant to their previous position — those stay visible on their own page for the record,
-  // but stop counting toward the dashboard tile / People-table chip. A never-evaluated assignment (no
-  // history at all) has no date to compare, so it's never treated as stale — we can't tell whether it
-  // was ticked before or after the rotation, and a genuinely-new-to-the-role assignment must still count.
-  function methodPredatesCurrentPosition(person, history){
-    if(!(person.positionHistory && person.positionHistory.length)) return false;
-    const latest = latestMethodEval(history);
-    if(!latest || !latest.date) return false;
-    const refDate = positionRefDate(person);
-    if(!refDate) return false;
-    return latest.date < refDate;
+  // v3.9 — which of the 179 CL-D-1000-0010 methods are actually required for a given position, read
+  // directly from that position's own curriculum rather than guessed or tracked by rotation timing.
+  // Every "Test Method (OJT)"-type curriculum course's topic embeds the exact same CL-T Document No.
+  // as the competency method it trains for (e.g. a Gas course topic reads "CL-T-2000-0013_Test method
+  // for Determination of Butadiene Purity..."), and this is a REAL, CL-D-1000-0001-derived mapping,
+  // not an inference: checked directly against COURSE_DATA, Gas's 37 Test-Method(OJT) course codes are
+  // EXACTLY its CL-T-2000-xxxx methods, Oil's 26 are EXACTLY CL-T-3000-xxxx, and Utility's 29 are
+  // EXACTLY CL-T-4000-xxxx — no partial overlap, no guessing. (This supersedes the v3.8 time-based
+  // "evaluated before their rotation date" heuristic, which depended on positionHistory being recorded
+  // through Change Position — the real roster's long-tenured, already-rotated people never went
+  // through that flow, so v3.8 was a no-op for exactly the people who needed it. Curriculum membership
+  // needs no rotation history at all: it only looks at the person's CURRENT position.)
+  function curriculumMethodCodes(positionKey){
+    const posDef = POSITIONS[positionKey];
+    if(!posDef) return new Set();
+    const set = new Set();
+    courseData(positionKey, undefined).forEach(it=>{
+      if(it.type !== "Test Method (OJT)") return;
+      const m = (it.topic||"").match(/CL-T-\d{4}-\d{4}/);
+      if(m) set.add(m[0].toLowerCase());
+    });
+    return set;
   }
-  // "Previous position" label for the stale-row badge — reuses the same Position History Change
-  // Position already records (see rotationFromTo) rather than a separate lookup.
-  function priorPositionLabelFor(person){
-    if(!(person.positionHistory && person.positionHistory.length)) return "";
-    const last = person.positionHistory[person.positionHistory.length-1];
-    return (POSITIONS[last.positionKey] && POSITIONS[last.positionKey].label) || last.positionKey;
+  function allCurriculumMethodCodes(){
+    const union = new Set();
+    POSITION_ORDER.forEach(pk=>{ curriculumMethodCodes(pk).forEach(c=>union.add(c)); });
+    return union;
+  }
+  // A method is "not required for this position" only when it's tied to some OTHER position's
+  // curriculum and not this one — the union of all 6 curricula's Test-Method(OJT) codes only covers
+  // 92 of the 179 methods (mostly the 2000/3000/4000-series ones tied to an Analyst curriculum); the
+  // other 87 (largely 5000/6000-series Polymer/Film & Mechanical tests) aren't tied to any position's
+  // onboarding curriculum at all, so for those there's no curriculum signal to judge by and they're
+  // always treated as relevant, exactly as before this fix.
+  function methodOutsideCurrentCurriculum(person, methodId){
+    const norm = String(methodId||"").toLowerCase();
+    if(curriculumMethodCodes(person.positionKey).has(norm)) return false;
+    if(!allCurriculumMethodCodes().has(norm)) return false;
+    return true;
+  }
+  // Which position's curriculum a method actually belongs to, for the badge — checked against the 4
+  // positions with a tight, meaningful method set (SS and the Engineer roles cover nearly everything,
+  // so naming them here would never be useful context for "where does this really belong").
+  function curriculumOwnerLabelFor(methodId){
+    const norm = String(methodId||"").toLowerCase();
+    for(const pk of ["gas","oil","utility","sm"]){
+      if(curriculumMethodCodes(pk).has(norm)) return POSITIONS[pk].label;
+    }
+    return "";
   }
   // Every catalog method as it applies to this person, each with computed status. Only assigned
   // methods unless opts.includeUnassigned — sorted by category then Document No.
@@ -956,7 +983,7 @@
       const entry = pm[id] || null;
       const assigned = !!(entry && entry.assigned);
       const history = (entry && entry.history) || [];
-      const stale = assigned && methodPredatesCurrentPosition(person, history);
+      const stale = assigned && methodOutsideCurrentCurriculum(person, id);
       return { id, method:m, assigned, history, status: methodStatus(m.freq_years, history), stale };
     });
     if(!opts.includeUnassigned) rows = rows.filter(r=>r.assigned);
@@ -967,24 +994,48 @@
     });
     return rows;
   }
-  // "stale" rows (see methodPredatesCurrentPosition) stay in `assigned` but are excluded from every
+  // "stale" rows (see methodOutsideCurrentCurriculum) stay in `assigned` but are excluded from every
   // status bucket below, so they never count toward the dashboard tile, the People table's worst-case
-  // chip, or the "needing attention" filter — only what's still relevant to the person's current
-  // position does.
+  // chip, or the "needing attention" filter — only what's actually required by the person's current
+  // position's curriculum does.
   function personMethodSummary(person){
     const rows = personMethodEntries(person, {});
     const c = { assigned: rows.length, overdue:0, retrain:0, due_first:0, due_soon:0, ok:0, na:0, stale:0 };
     rows.forEach(r=>{ if(r.stale){ c.stale++; return; } c[r.status.status]++; });
     return c;
   }
-  // Worst-first status for a single summary chip (People table "Methods" column).
-  function personMethodWorstStatus(sum){
-    if(sum.retrain>0) return "retrain";
-    if(sum.overdue>0) return "overdue";
-    if(sum.due_first>0) return "due_first";
-    if(sum.due_soon>0) return "due_soon";
-    if((sum.assigned - (sum.stale||0))>0) return "ok";
-    return null; // nothing currently-relevant assigned — no chip
+  // v3.9 — combines course progress (pr, from personProgressScoped) and the test-method summary (msum,
+  // from personMethodSummary) into ONE worst-first "attention" signal for the People table. The user
+  // pointed out the old separate Flag ("Complete"/"On track") and Methods columns often read as
+  // contradictory about the same person — e.g. Flag "Complete" next to Methods "18 overdue" — and asked
+  // whether Complete/On track even mean different things. They're both "nothing needs attention," so
+  // they're merged into one OK tier here (keeping the word "Complete" only as extra, non-warning color
+  // when every probation course is actually done); course-overdue and method-overdue/retrain are both
+  // real warnings, so whichever is worse always wins, and the text says which domain(s) it's coming
+  // from rather than a single ambiguous number.
+  function personAttentionInfo(pr, msum){
+    const courseOverdue = pr.overdue||0;
+    const methodOverdue = msum.overdue||0;
+    const methodRetrain = msum.retrain||0;
+    const methodNeverEval = msum.due_first||0;
+    const methodDueSoon = msum.due_soon||0;
+    if(methodRetrain>0){
+      return { level:"critical", cls:"retrain", text:`${methodRetrain} failed – retrain` };
+    }
+    if(courseOverdue>0 || methodOverdue>0){
+      const parts = [];
+      if(courseOverdue>0) parts.push(`${courseOverdue} course${courseOverdue===1?'':'s'}`);
+      if(methodOverdue>0) parts.push(`${methodOverdue} method${methodOverdue===1?'':'s'}`);
+      return { level:"overdue", cls:"overdue", text:`${parts.join(' + ')} overdue` };
+    }
+    if(methodNeverEval>0 || methodDueSoon>0){
+      const parts = [];
+      if(methodNeverEval>0) parts.push(`${methodNeverEval} never evaluated`);
+      if(methodDueSoon>0) parts.push(`${methodDueSoon} due soon`);
+      return { level:"due", cls:"due-first", text: parts.join(', ') };
+    }
+    const courseDone = pr.total>0 && pr.passed===pr.total;
+    return { level:"ok", cls: courseDone?"ontrack":"none", text: courseDone?"Complete":"On track" };
   }
   // Section-wide rollup (active people only), for the dashboard tile.
   function sectionMethodSummary(){
@@ -1683,7 +1734,7 @@
       <div class="tile clickable progress${drillFilter==='in_progress'?' active':''}" data-drill="in_progress"><div class="label">In progress</div><div class="value">${s.inprog}</div></div>
       <div class="tile clickable overdue${drillFilter==='overdue'?' active':''}" data-drill="overdue"><div class="label">Overdue courses</div><div class="value">${s.overdue}</div></div>
       <div class="tile clickable passed${drillFilter==='passed'?' active':''}" data-drill="passed"><div class="label">Completed courses</div><div class="value">${s.passed}<span class="unit">/ ${s.total}</span></div></div>
-      <div class="tile clickable overdue${dashFilters.methods==='attention'?' active':''}" data-methods-tile="attention" title="Overdue + Failed-retrain + Never-evaluated test methods (CL-D-1000-0010), active people only — a method last evaluated before someone's current position (i.e. from a role they've since rotated out of) doesn't count here, only on their own page"><div class="label">Test methods needing attention</div><div class="value">${ms.attention}</div></div>
+      <div class="tile clickable overdue${dashFilters.methods==='attention'?' active':''}" data-methods-tile="attention" title="Overdue + Failed-retrain + Never-evaluated test methods (CL-D-1000-0010), active people only — a method that isn't part of someone's CURRENT position's curriculum doesn't count here, only on their own page"><div class="label">Test methods needing attention</div><div class="value">${ms.attention}</div></div>
     </div>`;
   }
 
@@ -1717,8 +1768,9 @@
     if(dashFilters.flag!=="all"){
       people = people.filter(p=>{
         const pr = personProgressScoped(p, progressScope);
-        const flag = pr.overdue>0 ? "overdue" : (pr.total>0 && pr.passed===pr.total ? "complete" : "ontrack");
-        return flag===dashFilters.flag;
+        const info = personAttentionInfo(pr, personMethodSummary(p));
+        const bucket = (info.level==="critical"||info.level==="overdue") ? "overdue" : (info.level==="due" ? "due" : "ok");
+        return bucket===dashFilters.flag;
       });
     }
     if(dashFilters.personStatus!=="all") people = people.filter(p=>resolvedPersonStatus(p)===dashFilters.personStatus);
@@ -1743,11 +1795,11 @@
           <option value="all">All positions</option>
           ${POSITION_ORDER.map(pk=>`<option value="${pk}" ${dashFilters.position===pk?'selected':''}>${esc(POSITIONS[pk].label)}</option>`).join("")}
         </select>
-        <select id="filterFlag">
+        <select id="filterFlag" title="Combines course progress and test-method re-evaluation status">
           <option value="all">All statuses</option>
-          <option value="overdue" ${dashFilters.flag==='overdue'?'selected':''}>Overdue</option>
-          <option value="ontrack" ${dashFilters.flag==='ontrack'?'selected':''}>On track</option>
-          <option value="complete" ${dashFilters.flag==='complete'?'selected':''}>Complete</option>
+          <option value="overdue" ${dashFilters.flag==='overdue'?'selected':''}>Overdue / failed–retrain</option>
+          <option value="due" ${dashFilters.flag==='due'?'selected':''}>Due soon / never evaluated</option>
+          <option value="ok" ${dashFilters.flag==='ok'?'selected':''}>On track / complete</option>
         </select>
         <select id="filterEmployment" title="People who have left aren't counted in the section-wide statistics regardless of this filter">
           <option value="active" ${dashFilters.employment==='active'?'selected':''}>Active only</option>
@@ -1831,20 +1883,17 @@
     return `<div class="gantt-scroll"><table class="people">
       <thead><tr>
         <th class="chk-col"><input type="checkbox" id="selectAllVisible" ${allSelected?'checked':''}></th>
-        <th>Name</th><th>Employee ID</th><th>Position</th><th>Start date</th><th>Status</th><th>Progress (${esc(PROGRESS_SCOPES[progressScope].short)})</th><th>Flag</th><th title="Test-method re-evaluation status, per CL-D-1000-0010">Methods</th><th></th></tr></thead>
+        <th>Name</th><th>Employee ID</th><th>Position</th><th>Start date</th><th>Status</th><th>Progress (${esc(PROGRESS_SCOPES[progressScope].short)})</th><th title="Course progress and test-method re-evaluation status (CL-D-1000-0010) combined into one worst-first signal">Flag</th><th></th></tr></thead>
       <tbody>${people.map(p=>{
         const pr = personProgressScoped(p, progressScope);
         const active = isActive(p);
+        const msum = personMethodSummary(p);
+        const info = personAttentionInfo(pr, msum);
         const flag = !active ? `<span class="flag-chip resigned">Left${p.endDate?' '+esc(fmtDate(parseISO(p.endDate))):''}</span>`
-          : pr.overdue>0 ? `<span class="flag-chip overdue">${pr.overdue} overdue</span>`
-          : (pr.total>0 && pr.passed===pr.total ? `<span class="flag-chip ontrack">Complete</span>` : `<span class="flag-chip none">On track</span>`);
+          : `<span class="flag-chip ${info.cls}">${esc(info.text)}</span>`;
         const confirming = removeConfirmId===p.id;
         const rStatus = resolvedPersonStatus(p);
         const statusCell = `<span class="flag-chip status-${rStatus}">${esc(PERSON_STATUS_LABELS[rStatus])}</span>${p.statusOverride?' <span class="hint" style="font-size:11px">· manual</span>':''}${rStatus==='rotation'&&rotationFromTo(p)?`<div class="hint" style="font-size:11px">${esc(rotationFromTo(p))}</div>`:''}`;
-        const msum = personMethodSummary(p);
-        const worst = personMethodWorstStatus(msum);
-        const methodsCell = worst===null ? `<span class="flag-chip none">—</span>`
-          : `<span class="flag-chip ${METHOD_STATUS_CHIP_CLASS[worst]}">${worst==='ok' ? 'On track' : `${msum[worst]} ${METHOD_STATUS_LABEL[worst].toLowerCase()}`}</span>`;
         return `<tr${active?'':' class="row-resigned"'}>
           <td class="chk-col"><input type="checkbox" class="rowSelect" data-id="${p.id}" ${selectedPeopleIds.has(p.id)?'checked':''}></td>
           <td class="name" data-open="${p.id}">${esc(p.name)}</td>
@@ -1854,7 +1903,6 @@
           <td>${statusCell}</td>
           <td><div class="progress-cell"><div class="pbar"><i style="width:${pr.pct}%"></i></div><span class="pct">${pr.pct}%</span></div></td>
           <td>${flag}</td>
-          <td>${methodsCell}</td>
           <td><button class="btn small ${confirming?'danger-confirm':''}" data-remove="${p.id}">${confirming?'Click again':'Remove'}</button></td>
         </tr>`;
       }).join("")}</tbody>
@@ -2375,7 +2423,7 @@
         <td>${freqLabel}</td>
         <td class="mono"><input type="date" class="admin-input" style="width:130px" data-method-lastdate="${esc(r.id)}" value="${st.lastDate?esc(st.lastDate):''}" title="Edit the completed / last-evaluated date directly"></td>
         <td class="mono">${st.nextDue?esc(fmtDate(parseISO(st.nextDue))):'—'}</td>
-        <td><span class="flag-chip ${METHOD_STATUS_CHIP_CLASS[st.status]}">${esc(METHOD_STATUS_LABEL[st.status])}</span>${r.stale?` <span class="hint" style="font-size:11px" title="Last evaluated before ${esc(fmtDate(parseISO(positionRefDate(person))))}, when their current position began — doesn't count toward the dashboard tile or the People table's Methods column">from previous position${priorPositionLabelFor(person)?' ('+esc(priorPositionLabelFor(person))+')':''}</span>`:''}</td>
+        <td><span class="flag-chip ${METHOD_STATUS_CHIP_CLASS[st.status]}">${esc(METHOD_STATUS_LABEL[st.status])}</span>${r.stale?` <span class="hint" style="font-size:11px" title="Not part of ${esc(POSITIONS[person.positionKey].label)}'s curriculum — doesn't count toward the dashboard tile or the People table's Methods column">not required for current position${curriculumOwnerLabelFor(r.id)?' (belongs to '+esc(curriculumOwnerLabelFor(r.id))+')':''}</span>`:''}</td>
         <td style="white-space:nowrap">
           ${r.assigned?`<button class="btn small" data-method-log="${esc(r.id)}">Log eval.</button>`:''}
           ${hist.length?`<button class="btn small" data-method-hist="${esc(r.id)}">${histOpen?'Hide':'History ('+hist.length+')'}</button>`:''}
@@ -2405,7 +2453,7 @@
       <section class="panel">
         <div class="panel-head">
           <h2>Test Methods — Competency &amp; Re-evaluation</h2>
-          <div class="meta">Per CL-D-1000-0010 Rev.08 &nbsp;·&nbsp; ${sum.assigned} assigned &nbsp;·&nbsp; ${sum.overdue} overdue &nbsp;·&nbsp; ${sum.retrain} failed–retrain &nbsp;·&nbsp; ${sum.due_first} never evaluated &nbsp;·&nbsp; ${sum.due_soon} due soon${sum.stale?` &nbsp;·&nbsp; ${sum.stale} from a previous position (not counted above)`:''}</div>
+          <div class="meta">Per CL-D-1000-0010 Rev.08 &nbsp;·&nbsp; ${sum.assigned} assigned &nbsp;·&nbsp; ${sum.overdue} overdue &nbsp;·&nbsp; ${sum.retrain} failed–retrain &nbsp;·&nbsp; ${sum.due_first} never evaluated &nbsp;·&nbsp; ${sum.due_soon} due soon${sum.stale?` &nbsp;·&nbsp; ${sum.stale} not required for current position (not counted above)`:''}</div>
         </div>
         <div class="people-toolbar">
           <input type="text" id="personMethodSearch" placeholder="Search doc no. or name" value="${esc(ui.search)}" style="width:220px">
@@ -2417,7 +2465,7 @@
             <option value="retrain" ${ui.statusFilter==='retrain'?'selected':''}>Failed — retrain</option>
             <option value="due_first" ${ui.statusFilter==='due_first'?'selected':''}>Never evaluated</option>
             <option value="due_soon" ${ui.statusFilter==='due_soon'?'selected':''}>Due soon</option>
-            ${sum.stale?`<option value="stale" ${ui.statusFilter==='stale'?'selected':''}>From previous position (${sum.stale})</option>`:''}
+            ${sum.stale?`<option value="stale" ${ui.statusFilter==='stale'?'selected':''}>Not required for current position (${sum.stale})</option>`:''}
           </select>
           <button class="btn small" id="openMethodsImport" title="Applies to every matching person found in the file, not just this one — for a multi-person file, the dashboard's &quot;Import test results (Excel)&quot; button is the more direct entry point">Import from Excel…</button>
           <input type="file" id="methodsImportFile" accept=".xlsx,.xls" style="display:none">
@@ -2431,18 +2479,23 @@
       </section>`;
   }
 
-  // ---------- v3.7/v3.8: Excel import for Re-evaluation AND Planner/Schedule data ----------
+  // ---------- v3.7/v3.8/v3.9: Excel import for Re-evaluation AND Planner/Schedule data ----------
   // Format confirmed against a real exported report (not just the original sample screenshot):
   // repeating blocks per person of "Name: <name>" / "Position: <label>" header rows, a small
   // Competency summary table (skipped — no Course/Document-No. cells in it), then a course table with
   // columns No. | Course | Description | Complete Date | Re-Training Date. Two independent join keys
-  // come out of the same row: "Description" holds a CL-T-XXXX-XXXX Document No. that matches
-  // onb_methods.id directly (test methods, see applyMethodsImportRow) — every other Document-No.
-  // prefix (e.g. HS-K-..., CL-P-..., CL-W-..., IM-P-...) is a non-test-method course and is skipped
-  // the same way the Competency summary table is, since it never matches the CL-T pattern. "Course"
-  // holds a Lab-XX-XX-XXX code that separately matches a curriculum course code directly (v3.8, see
-  // applyCourseImportRow) — a row can update a test method, a curriculum course, both, or (for
-  // company-wide training this tracker doesn't track) neither. In the real export, "Name:"/
+  // come out of the same row, and each can separately update BOTH tabs: "Description" holds a
+  // CL-T-XXXX-XXXX Document No. that matches onb_methods.id directly (updates the Re-evaluation
+  // record, see applyMethodsImportRow) and — as of v3.9 — ALSO matches a curriculum "Test Method
+  // (OJT)" course's embedded CL-T code for the person's current position, updating that course's
+  // Planner/Schedule status too (see findCourseByMethodCode); every other Document-No. prefix (e.g.
+  // HS-K-..., CL-P-..., CL-W-..., IM-P-...) is a non-test-method course and is skipped the same way the
+  // Competency summary table is, since it never matches the CL-T pattern. "Course" holds a
+  // Lab-XX-XX-XXX code that separately matches a curriculum course's own "code" field directly (v3.8,
+  // see findCourseByCurriculumCode) — a row can therefore update a test method, a curriculum course
+  // (via either or both join keys, deduped so one course is only marked once — see
+  // parseMethodsImportWorkbook), or (for company-wide training this tracker doesn't track) neither. In
+  // the real export, "Name:"/
   // "Position:" and the column headers all sit in *merged* cells — the label and its value are not
   // always adjacent columns (e.g. "Name:" in column A, the name itself in column C, with column B
   // blank from the merge) — the row-scan below accounts for that. Dates are real Excel date cells
@@ -2493,27 +2546,46 @@
     }
   }
   // v3.8 — the same export's "Course" column (e.g. "Lab-05-03-002") is a curriculum course code, not
-  // a test-method Document No. — it lines up with COURSE_DATA's own course codes directly (confirmed
-  // against a real export: 99 of 111 distinct Course-column values in one file matched an existing
-  // curriculum code outright; the rest are company-wide training the onboarding curriculum doesn't
-  // track, e.g. HR/safety courses, and are simply left unmatched like an unrecognized Document No.
-  // already is). Matched against the person's CURRENT position's curriculum only (adminCourseRows,
+  // a test-method Document No. — it lines up with COURSE_DATA's own course "code" field directly
+  // (confirmed against a real export: 99 of 111 distinct Course-column values in one file matched an
+  // existing curriculum code outright; the rest are company-wide training the onboarding curriculum
+  // doesn't track, e.g. HR/safety courses, and are simply left unmatched like an unrecognized Document
+  // No. already is).
+  function findCourseByCurriculumCode(person, courseCode){
+    const posDef = POSITIONS[person.positionKey];
+    if(!posDef) return null;
+    const norm = normCode(courseCode);
+    const all = adminCourseRows(posDef.courseKey, positionRefDate(person));
+    return all.find(it=>normCode(it.code)===norm) || null;
+  }
+  // v3.9 — the SAME Description-column CL-T Document No. already used to update the Re-evaluation
+  // record (applyMethodsImportRow) also lines up with a curriculum course directly, for a "Test Method
+  // (OJT)"-type course: its topic embeds the identical CL-T code (see curriculumMethodCodes above), so
+  // no separate Course-column lookup is needed for these — the same match that updates the competency
+  // record can update the matching Planner/Schedule course too. Per the user: an import row that shows
+  // a real completion updates that course to Passed; a row with nothing to import (no completion date
+  // at all) never reaches this function, so an assignment that's still genuinely due is simply left
+  // alone rather than being touched.
+  function findCourseByMethodCode(person, methodId){
+    const posDef = POSITIONS[person.positionKey];
+    if(!posDef) return null;
+    const norm = String(methodId||"").toLowerCase();
+    const all = adminCourseRows(posDef.courseKey, positionRefDate(person));
+    return all.find(it=>{
+      const m = (it.topic||"").match(/CL-T-\d{4}-\d{4}/);
+      return m && m[0].toLowerCase()===norm;
+    }) || null;
+  }
+  // Both lookups above are scoped to the person's CURRENT position's curriculum only (adminCourseRows,
   // including deactivated courses in case one was retired after they completed it) — a code that only
   // exists in a position they've since rotated out of correctly falls through to "unmatched" rather
   // than silently updating the wrong curriculum, the same "current position only" principle as the
-  // test-method staleness fix above. Applies to every position, not just Analysts, since the Planner
-  // Schedule tab (unlike Re-evaluation) isn't Analyst-only.
-  function applyCourseImportRow(person, courseCode, completeISO){
-    const posDef = POSITIONS[person.positionKey];
-    if(!posDef) return false;
-    const norm = normCode(courseCode);
-    const all = adminCourseRows(posDef.courseKey, positionRefDate(person));
-    const match = all.find(it=>normCode(it.code)===norm);
-    if(!match) return false;
-    const ist = itemState(person, match.id);
+  // test-method curriculum-relevance fix above. Applies to every position, not just Analysts, since
+  // the Planner/Schedule tab (unlike Re-evaluation) isn't Analyst-only.
+  function markCourseImported(person, courseRow, completeISO){
+    const ist = itemState(person, courseRow.id);
     ist.status = "Passed";
     ist.actualDate = completeISO;
-    return true;
   }
   function parseMethodsImportWorkbook(wb){
     const result = {
@@ -2558,15 +2630,29 @@
         if(!completeISO) return; // nothing to import for this row
         const person = findPersonByName(currentName);
         if(!person){ result.unmatchedPeople.add(currentName); return; }
+        let matchedMethodId = null;
         if(docCell){
           const methodId = Object.keys(STATE.methods).find(id=>id.toLowerCase()===docCell.toLowerCase()) || null;
           if(!methodId) result.unmatchedMethods.add(docCell);
-          else { applyMethodsImportRow(person, methodId, completeISO, retrainISO); result.updated.push({ person: person.name, methodId, completeISO, retrainISO }); }
+          else { matchedMethodId = methodId; applyMethodsImportRow(person, methodId, completeISO, retrainISO); result.updated.push({ person: person.name, methodId, completeISO, retrainISO }); }
         }
+        // A row can point at the SAME curriculum course through both the Course-column Lab-code and
+        // the Description-column CL-T code (a Test Method (OJT) course's "code" and its topic's
+        // embedded CL-T No. both resolve to it) — collect matches from both paths into one map keyed
+        // by course id so a single course is only marked Passed, and only counted, once per row.
+        const matchedCourses = new Map();
         if(courseCell){
-          if(applyCourseImportRow(person, courseCell, completeISO)) result.coursesUpdated.push({ person: person.name, code: courseCell, completeISO });
-          else result.unmatchedCourses.add(courseCell);
+          const c = findCourseByCurriculumCode(person, courseCell);
+          if(c) matchedCourses.set(c.id, c); else result.unmatchedCourses.add(courseCell);
         }
+        if(matchedMethodId){
+          const c2 = findCourseByMethodCode(person, matchedMethodId);
+          if(c2) matchedCourses.set(c2.id, c2);
+        }
+        matchedCourses.forEach(c=>{
+          markCourseImported(person, c, completeISO);
+          result.coursesUpdated.push({ person: person.name, code: c.code, completeISO });
+        });
       });
     });
     return result;
@@ -2583,7 +2669,7 @@
     result.coursesUpdated.forEach(u=>{ byCoursePerson[u.person] = (byCoursePerson[u.person]||0) + 1; });
     const coursePeopleCount = Object.keys(byCoursePerson).length;
     let msg = `Import from "${filename}": ${result.updated.length} test-method record(s) updated across ${peopleCount} ${peopleCount===1?'person':'people'}.`;
-    if(result.coursesUpdated.length) msg += `\n${result.coursesUpdated.length} course(s) on the Planner/Schedule tab marked Passed across ${coursePeopleCount} ${coursePeopleCount===1?'person':'people'} (matched by course code, any position).`;
+    if(result.coursesUpdated.length) msg += `\n${result.coursesUpdated.length} course(s) on the Planner/Schedule tab marked Passed across ${coursePeopleCount} ${coursePeopleCount===1?'person':'people'} (matched by course code or test-method code, any position).`;
     if(result.unmatchedPeople.size) msg += `\nName(s) in the file not found in the roster (resigned/rotated/promoted people, or a spelling mismatch, both read the same way — check against "Manage test methods"/the People table if unexpected): ${Array.from(result.unmatchedPeople).join(", ")}.`;
     if(result.unmatchedMethods.size) msg += `\nDocument No.(s) not found in the test-method catalog: ${Array.from(result.unmatchedMethods).join(", ")}.`;
     if(result.unmatchedCourses.size) msg += `\nCourse code(s) not found in the matched person's current curriculum (company-wide training this tracker doesn't cover, or a course from a position they've since rotated out of): ${Array.from(result.unmatchedCourses).join(", ")}.`;
