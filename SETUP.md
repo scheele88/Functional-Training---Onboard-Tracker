@@ -19,10 +19,10 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.7, with the September 2026 import bugfix) version — see "Position changes / rotations",
-  "Per-person Status", "Progress scope (new)", "Export Report", **"Test Methods — Competency &
-  Re-evaluation Tracking (v3.6)"**, and **"Re-evaluation tab, editable dates & Excel import (new,
-  v3.7)"** below for what's new.
+  (v3.8) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
+  "Export Report", **"Test Methods — Competency & Re-evaluation Tracking (v3.6)"**, **"Re-evaluation
+  tab, editable dates & Excel import (new, v3.7)"**, and **"Test methods now scope to your current
+  position, and Excel import now updates the Planner/Schedule tab too (v3.8)"** below for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -224,6 +224,63 @@ after the fix also surfaced the diacritics issue described above, fixed the same
 were verified directly against the file you sent — it now correctly reports every person and every
 test-method record it contains.
 
+## Test methods now scope to your current position, and Excel import now updates the Planner/Schedule tab too (v3.8)
+
+Two changes, both from the Ninh Minh Hai example you flagged (rotated Oil → Gas, but his page kept
+warning about an Oil test method) plus your request to also update course status from an import, not
+just test methods.
+
+**1. A test method last evaluated under a previous position no longer counts as a warning.** If
+someone has ever used "Change position" (i.e. they show a Position History), any assigned method
+whose most recent evaluation happened *before* their current position's effective date is now
+treated as "from a previous position":
+
+- It's excluded from the dashboard's "Test methods needing attention" tile, the People table's
+  Methods column chip, and the "needing attention" click-to-filter — none of those will flag it
+  anymore, matching your "only count for their current position" request.
+- It still shows on the person's own Re-evaluation tab, with its true status (e.g. "Overdue") plus a
+  small **"from previous position (…)"** label next to it, so nothing is hidden or deleted — you can
+  still see it, and untick it yourself if it's no longer relevant at all. A new **"From previous
+  position"** option in that tab's filter dropdown shows just these, across however many methods a
+  person has accumulated across rotations, so you can review and clean them up in one place.
+- A method that's simply never been evaluated yet still counts as normal (Never evaluated) even for
+  someone who's rotated — there's no reliable way to tell whether an un-evaluated assignment predates
+  or postdates a rotation, so it isn't suppressed.
+
+This is a general fix, not specific to Ninh Minh Hai — it applies automatically to anyone in the
+tracker with a Position History, present or future. **Note on scope:** this only clears warnings for
+evaluations that happened *before* a rotation. It doesn't attempt to know which of the 179 test
+methods genuinely belong to which analyst position (there's no such mapping in CL-D-1000-0010 itself,
+and I found real evidence in your own uploaded file that methods aren't cleanly one-position-only —
+e.g. some Oil analysts are also evaluated on Gas-Chromatography-prefixed methods). If you want a
+tighter, explicit "this method only applies to Gas/Oil/Utility" mapping later, that's a separate,
+larger feature (an admin-editable field per method) — let me know if you want it.
+
+**2. Excel import now also updates the Planner/Schedule tab — for every position, not just
+Analysts.** Your training-report export's **Course** column (e.g. `Lab-05-03-002`) turns out to be a
+second, independent join key: it lines up directly with this tracker's own curriculum course codes
+(confirmed against your real file — 99 of its 111 distinct Course-column values matched an existing
+course outright). Previously only the Description column (the CL-T Document No., for test methods)
+was used; now both are read from the same row:
+
+- If the Course-column code matches a course in the matched person's **current** curriculum, that
+  course is marked **Passed** on their Planner/Schedule tab, with its Completed date set from the
+  same Complete Date cell — regardless of position, so this now also updates Section Manager,
+  Supervisor, and Lead/Senior/QC Engineer pages, which don't have a Re-evaluation tab at all.
+- Matching is scoped to their current position's curriculum only, the same "current position only"
+  principle as the test-method fix above — a course code that only exists in a position someone has
+  since rotated out of correctly falls through to "not found" rather than being silently applied to
+  the wrong curriculum.
+- The import summary banner now reports both halves separately: how many test-method records were
+  updated (and for how many people), and how many Planner/Schedule courses were marked Passed (and
+  for how many people) — plus, alongside the existing unmatched-name/unmatched-Document-No. lines, a
+  new line for course codes that didn't match anyone's current curriculum. A course code not matching
+  is normal and expected for rows that are company-wide training (HR, general safety, etc.) this
+  tracker was never meant to track — it isn't an error.
+- Both entry points (the dashboard's "Import test results (Excel)" button and the per-person "Import
+  from Excel…" button on an Analyst's Re-evaluation tab) now do both halves of the update from the
+  same file in one pass.
+
 ## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
 This is the same page as everything above — I originally built this as a separate app and separate
@@ -345,10 +402,16 @@ uploaded export file rather than a synthetic one, confirming it now correctly re
 "Name:" block despite the merged-cell layout, matches diacritic and plain-ASCII spellings of the
 same name, correctly reports the people in the file who aren't in the roster, updates every matched
 person from a single import (checked for two different people from the same file, from both the
-dashboard and the per-person entry points), and triggers a save) — everything passed, and I re-ran
-the full pre-existing test suite afterward to confirm nothing already working (course schedules,
-position changes, Export Report, Progress scope, the v3.6 Test Methods panel, the earlier v3.7
-tab/date-edit behavior) regressed. However, this sandbox's network access doesn't
+dashboard and the per-person entry points), and triggers a save; and new for v3.8 — a mocked person
+who rotated positions (evaluated on a method before the rotation, and a different method after)
+correctly shows the pre-rotation method as excluded from the dashboard tile and People-table chip
+while still visible with a "from previous position" label on their own page, the new filter isolates
+it correctly, and a synthetic Section-Manager-position import (no test methods involved at all)
+correctly marks a Planner/Schedule course Passed with the right completion date, entirely through the
+Course-column join — everything passed, and I re-ran the full pre-existing test suite afterward
+(course schedules, position changes, Export Report, Progress scope, the v3.6 Test Methods panel, the
+v3.7 tab/date-edit behavior, and the v3.7.1 import-bugfix suite against your real file) to confirm
+nothing regressed. However, this sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
 confirm the 24 people and their Passed/Not Started course statuses look right, add a test person
@@ -359,7 +422,11 @@ open a test person's page, assign a method, log an evaluation, refresh the page 
 still there. For v3.7, open an Analyst's page and confirm the header buttons are gone and the two
 tabs work, try editing a Completed date directly, and try the dashboard's "Import test results
 (Excel)" button on one of your own real export files to confirm it updates everyone the file covers
-and the summary banner's counts look right before relying on it for routine use.
+and the summary banner's counts look right before relying on it for routine use. For v3.8, check
+Ninh Minh Hai's own page (or anyone else who's rotated) and confirm the pre-rotation method now reads
+"from previous position" instead of driving an "Overdue" tile count, and try an import against a file
+covering a Section Manager/Supervisor/Engineer to confirm their Planner/Schedule tab picks up the
+Course-column matches correctly.
 
 ## Everyday use
 

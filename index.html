@@ -422,7 +422,7 @@
       <button class="btn small dash-only-action" id="openExportReport">Export report</button>
       <button class="btn small dash-only-action" id="openAdmin">Manage courses</button>
       <button class="btn small dash-only-action" id="openMethodsAdmin">Manage test methods</button>
-      <button class="btn small dash-only-action" id="openDashMethodsImport" title="Bulk-update Complete Date / Re-Training Date for every matching analyst found in one Excel file">Import test results (Excel)</button>
+      <button class="btn small dash-only-action" id="openDashMethodsImport" title="Bulk-update test-method Complete Date / Re-Training Date AND Planner/Schedule course status, for every matching person found in one Excel file — any position, not just Analysts">Import test results (Excel)</button>
       <input type="file" id="dashMethodsImportFile" accept=".xlsx,.xls" style="display:none">
       <button class="btn small dash-only-action" id="openPwdSet" title="Set or change the admin password">🔒</button>
       <span class="save-chip dash-only-action" id="saveChip" data-state="idle">Connecting…</span>
@@ -923,6 +923,29 @@
     const status = days<0 ? "overdue" : (days<=METHOD_DUE_SOON_DAYS ? "due_soon" : "ok");
     return { status, nextDue, lastDate:latest.date, daysUntil:days };
   }
+  // A method's most recent evaluation predates the person's CURRENT position when they've rotated
+  // (positionHistory non-empty) and that evaluation happened before their current position's
+  // effective date — i.e. it was logged while they held a different role. Per the user: someone who
+  // rotated (e.g. Oil → Gas) shouldn't keep showing "Overdue" warnings for methods that were only
+  // ever relevant to their previous position — those stay visible on their own page for the record,
+  // but stop counting toward the dashboard tile / People-table chip. A never-evaluated assignment (no
+  // history at all) has no date to compare, so it's never treated as stale — we can't tell whether it
+  // was ticked before or after the rotation, and a genuinely-new-to-the-role assignment must still count.
+  function methodPredatesCurrentPosition(person, history){
+    if(!(person.positionHistory && person.positionHistory.length)) return false;
+    const latest = latestMethodEval(history);
+    if(!latest || !latest.date) return false;
+    const refDate = positionRefDate(person);
+    if(!refDate) return false;
+    return latest.date < refDate;
+  }
+  // "Previous position" label for the stale-row badge — reuses the same Position History Change
+  // Position already records (see rotationFromTo) rather than a separate lookup.
+  function priorPositionLabelFor(person){
+    if(!(person.positionHistory && person.positionHistory.length)) return "";
+    const last = person.positionHistory[person.positionHistory.length-1];
+    return (POSITIONS[last.positionKey] && POSITIONS[last.positionKey].label) || last.positionKey;
+  }
   // Every catalog method as it applies to this person, each with computed status. Only assigned
   // methods unless opts.includeUnassigned — sorted by category then Document No.
   function personMethodEntries(person, opts){
@@ -933,7 +956,8 @@
       const entry = pm[id] || null;
       const assigned = !!(entry && entry.assigned);
       const history = (entry && entry.history) || [];
-      return { id, method:m, assigned, history, status: methodStatus(m.freq_years, history) };
+      const stale = assigned && methodPredatesCurrentPosition(person, history);
+      return { id, method:m, assigned, history, status: methodStatus(m.freq_years, history), stale };
     });
     if(!opts.includeUnassigned) rows = rows.filter(r=>r.assigned);
     rows.sort((a,b)=>{
@@ -943,10 +967,14 @@
     });
     return rows;
   }
+  // "stale" rows (see methodPredatesCurrentPosition) stay in `assigned` but are excluded from every
+  // status bucket below, so they never count toward the dashboard tile, the People table's worst-case
+  // chip, or the "needing attention" filter — only what's still relevant to the person's current
+  // position does.
   function personMethodSummary(person){
     const rows = personMethodEntries(person, {});
-    const c = { assigned: rows.length, overdue:0, retrain:0, due_first:0, due_soon:0, ok:0, na:0 };
-    rows.forEach(r=>{ c[r.status.status]++; });
+    const c = { assigned: rows.length, overdue:0, retrain:0, due_first:0, due_soon:0, ok:0, na:0, stale:0 };
+    rows.forEach(r=>{ if(r.stale){ c.stale++; return; } c[r.status.status]++; });
     return c;
   }
   // Worst-first status for a single summary chip (People table "Methods" column).
@@ -955,17 +983,17 @@
     if(sum.overdue>0) return "overdue";
     if(sum.due_first>0) return "due_first";
     if(sum.due_soon>0) return "due_soon";
-    if(sum.assigned>0) return "ok";
-    return null; // nothing assigned — no chip
+    if((sum.assigned - (sum.stale||0))>0) return "ok";
+    return null; // nothing currently-relevant assigned — no chip
   }
   // Section-wide rollup (active people only), for the dashboard tile.
   function sectionMethodSummary(){
-    const c = { people:0, assigned:0, overdue:0, retrain:0, due_first:0, due_soon:0, ok:0, attention:0 };
+    const c = { people:0, assigned:0, overdue:0, retrain:0, due_first:0, due_soon:0, ok:0, stale:0, attention:0 };
     Object.values(STATE.people).filter(isActive).forEach(p=>{
       c.people++;
       const s = personMethodSummary(p);
       c.assigned += s.assigned; c.overdue += s.overdue; c.retrain += s.retrain;
-      c.due_first += s.due_first; c.due_soon += s.due_soon; c.ok += s.ok;
+      c.due_first += s.due_first; c.due_soon += s.due_soon; c.ok += s.ok; c.stale += s.stale;
     });
     c.attention = c.overdue + c.retrain + c.due_first;
     return c;
@@ -1655,7 +1683,7 @@
       <div class="tile clickable progress${drillFilter==='in_progress'?' active':''}" data-drill="in_progress"><div class="label">In progress</div><div class="value">${s.inprog}</div></div>
       <div class="tile clickable overdue${drillFilter==='overdue'?' active':''}" data-drill="overdue"><div class="label">Overdue courses</div><div class="value">${s.overdue}</div></div>
       <div class="tile clickable passed${drillFilter==='passed'?' active':''}" data-drill="passed"><div class="label">Completed courses</div><div class="value">${s.passed}<span class="unit">/ ${s.total}</span></div></div>
-      <div class="tile clickable overdue${dashFilters.methods==='attention'?' active':''}" data-methods-tile="attention" title="Overdue + Failed-retrain + Never-evaluated test methods (CL-D-1000-0010), active people only"><div class="label">Test methods needing attention</div><div class="value">${ms.attention}</div></div>
+      <div class="tile clickable overdue${dashFilters.methods==='attention'?' active':''}" data-methods-tile="attention" title="Overdue + Failed-retrain + Never-evaluated test methods (CL-D-1000-0010), active people only — a method last evaluated before someone's current position (i.e. from a role they've since rotated out of) doesn't count here, only on their own page"><div class="label">Test methods needing attention</div><div class="value">${ms.attention}</div></div>
     </div>`;
   }
 
@@ -2321,7 +2349,8 @@
         if(ui.statusFilter==="assigned") return r.assigned;
         if(ui.statusFilter==="unassigned") return !r.assigned;
         if(ui.statusFilter==="all") return true;
-        return r.assigned && r.status.status===ui.statusFilter;
+        if(ui.statusFilter==="stale") return r.stale;
+        return r.assigned && !r.stale && r.status.status===ui.statusFilter;
       });
     if(ui.search){
       const q = ui.search.toLowerCase();
@@ -2346,7 +2375,7 @@
         <td>${freqLabel}</td>
         <td class="mono"><input type="date" class="admin-input" style="width:130px" data-method-lastdate="${esc(r.id)}" value="${st.lastDate?esc(st.lastDate):''}" title="Edit the completed / last-evaluated date directly"></td>
         <td class="mono">${st.nextDue?esc(fmtDate(parseISO(st.nextDue))):'—'}</td>
-        <td><span class="flag-chip ${METHOD_STATUS_CHIP_CLASS[st.status]}">${esc(METHOD_STATUS_LABEL[st.status])}</span></td>
+        <td><span class="flag-chip ${METHOD_STATUS_CHIP_CLASS[st.status]}">${esc(METHOD_STATUS_LABEL[st.status])}</span>${r.stale?` <span class="hint" style="font-size:11px" title="Last evaluated before ${esc(fmtDate(parseISO(positionRefDate(person))))}, when their current position began — doesn't count toward the dashboard tile or the People table's Methods column">from previous position${priorPositionLabelFor(person)?' ('+esc(priorPositionLabelFor(person))+')':''}</span>`:''}</td>
         <td style="white-space:nowrap">
           ${r.assigned?`<button class="btn small" data-method-log="${esc(r.id)}">Log eval.</button>`:''}
           ${hist.length?`<button class="btn small" data-method-hist="${esc(r.id)}">${histOpen?'Hide':'History ('+hist.length+')'}</button>`:''}
@@ -2376,7 +2405,7 @@
       <section class="panel">
         <div class="panel-head">
           <h2>Test Methods — Competency &amp; Re-evaluation</h2>
-          <div class="meta">Per CL-D-1000-0010 Rev.08 &nbsp;·&nbsp; ${sum.assigned} assigned &nbsp;·&nbsp; ${sum.overdue} overdue &nbsp;·&nbsp; ${sum.retrain} failed–retrain &nbsp;·&nbsp; ${sum.due_first} never evaluated &nbsp;·&nbsp; ${sum.due_soon} due soon</div>
+          <div class="meta">Per CL-D-1000-0010 Rev.08 &nbsp;·&nbsp; ${sum.assigned} assigned &nbsp;·&nbsp; ${sum.overdue} overdue &nbsp;·&nbsp; ${sum.retrain} failed–retrain &nbsp;·&nbsp; ${sum.due_first} never evaluated &nbsp;·&nbsp; ${sum.due_soon} due soon${sum.stale?` &nbsp;·&nbsp; ${sum.stale} from a previous position (not counted above)`:''}</div>
         </div>
         <div class="people-toolbar">
           <input type="text" id="personMethodSearch" placeholder="Search doc no. or name" value="${esc(ui.search)}" style="width:220px">
@@ -2388,10 +2417,11 @@
             <option value="retrain" ${ui.statusFilter==='retrain'?'selected':''}>Failed — retrain</option>
             <option value="due_first" ${ui.statusFilter==='due_first'?'selected':''}>Never evaluated</option>
             <option value="due_soon" ${ui.statusFilter==='due_soon'?'selected':''}>Due soon</option>
+            ${sum.stale?`<option value="stale" ${ui.statusFilter==='stale'?'selected':''}>From previous position (${sum.stale})</option>`:''}
           </select>
           <button class="btn small" id="openMethodsImport" title="Applies to every matching person found in the file, not just this one — for a multi-person file, the dashboard's &quot;Import test results (Excel)&quot; button is the more direct entry point">Import from Excel…</button>
           <input type="file" id="methodsImportFile" accept=".xlsx,.xls" style="display:none">
-          <span class="hint">Tick to assign a method to this person; untick to remove it from their qualification list (history is kept). "Failed — retrain" overrides the date-based status until a new, passing evaluation is logged. Completed date can be edited directly in the table below. Importing from Excel updates every person the file matches, not just this one — use the dashboard's "Import test results (Excel)" button if the file covers many people at once.</span>
+          <span class="hint">Tick to assign a method to this person; untick to remove it from their qualification list (history is kept). "Failed — retrain" overrides the date-based status until a new, passing evaluation is logged. Completed date can be edited directly in the table below. Importing from Excel updates every person the file matches (not just this one) and, from the same file, also marks any matching curriculum course Passed on their Planner/Schedule tab — use the dashboard's "Import test results (Excel)" button if the file covers many people at once.</span>
         </div>
         ${ui.importMsg ? `<div class="hint" id="methodsImportMsg" style="white-space:pre-line;padding:8px 12px;margin:0 0 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2, rgba(0,0,0,.03))">${esc(ui.importMsg)}</div>` : ''}
         <div class="gantt-scroll"><table class="people admin-table">
@@ -2401,22 +2431,26 @@
       </section>`;
   }
 
-  // ---------- v3.7: Excel import for Re-evaluation data (Complete Date / Re-Training Date) ----------
+  // ---------- v3.7/v3.8: Excel import for Re-evaluation AND Planner/Schedule data ----------
   // Format confirmed against a real exported report (not just the original sample screenshot):
   // repeating blocks per person of "Name: <name>" / "Position: <label>" header rows, a small
-  // Competency summary table (skipped — no CL-T doc-no cells in it), then a course table with columns
-  // No. | Course | Description | Complete Date | Re-Training Date, where "Description" holds the
-  // CL-T-XXXX-XXXX Document No. that matches onb_methods.id directly — every other Document-No.
+  // Competency summary table (skipped — no Course/Document-No. cells in it), then a course table with
+  // columns No. | Course | Description | Complete Date | Re-Training Date. Two independent join keys
+  // come out of the same row: "Description" holds a CL-T-XXXX-XXXX Document No. that matches
+  // onb_methods.id directly (test methods, see applyMethodsImportRow) — every other Document-No.
   // prefix (e.g. HS-K-..., CL-P-..., CL-W-..., IM-P-...) is a non-test-method course and is skipped
-  // the same way the Competency summary table is, since it simply never matches the CL-T pattern. In
-  // the real export, "Name:"/"Position:" and the column headers all sit in *merged* cells — the label
-  // and its value are not always adjacent columns (e.g. "Name:" in column A, the name itself in
-  // column C, with column B blank from the merge) — the row-scan below accounts for that. Dates are
-  // real Excel date cells formatted dd/mm/yy (confirmed day-first from the cell format itself, not
-  // guessed). A file can contain one or many people's blocks — even several repeated blocks for the
-  // *same* person — across one or many sheets; every block found is processed in one pass, and person
-  // names are matched with Vietnamese-diacritic-insensitive comparison (see normalizeNameForMatch)
-  // since a report export may spell a name with full diacritics even where the roster doesn't.
+  // the same way the Competency summary table is, since it never matches the CL-T pattern. "Course"
+  // holds a Lab-XX-XX-XXX code that separately matches a curriculum course code directly (v3.8, see
+  // applyCourseImportRow) — a row can update a test method, a curriculum course, both, or (for
+  // company-wide training this tracker doesn't track) neither. In the real export, "Name:"/
+  // "Position:" and the column headers all sit in *merged* cells — the label and its value are not
+  // always adjacent columns (e.g. "Name:" in column A, the name itself in column C, with column B
+  // blank from the merge) — the row-scan below accounts for that. Dates are real Excel date cells
+  // formatted dd/mm/yy (confirmed day-first from the cell format itself, not guessed). A file can
+  // contain one or many people's blocks — even several repeated blocks for the *same* person — across
+  // one or many sheets; every block found is processed in one pass, and person names are matched with
+  // Vietnamese-diacritic-insensitive comparison (see normalizeNameForMatch) since a report export may
+  // spell a name with full diacritics even where the roster doesn't.
   function parseImportDateCell(v){
     if(v==null || v==="") return null;
     const s = String(v).trim();
@@ -2458,8 +2492,34 @@
       pm.history.push(entry);
     }
   }
+  // v3.8 — the same export's "Course" column (e.g. "Lab-05-03-002") is a curriculum course code, not
+  // a test-method Document No. — it lines up with COURSE_DATA's own course codes directly (confirmed
+  // against a real export: 99 of 111 distinct Course-column values in one file matched an existing
+  // curriculum code outright; the rest are company-wide training the onboarding curriculum doesn't
+  // track, e.g. HR/safety courses, and are simply left unmatched like an unrecognized Document No.
+  // already is). Matched against the person's CURRENT position's curriculum only (adminCourseRows,
+  // including deactivated courses in case one was retired after they completed it) — a code that only
+  // exists in a position they've since rotated out of correctly falls through to "unmatched" rather
+  // than silently updating the wrong curriculum, the same "current position only" principle as the
+  // test-method staleness fix above. Applies to every position, not just Analysts, since the Planner
+  // Schedule tab (unlike Re-evaluation) isn't Analyst-only.
+  function applyCourseImportRow(person, courseCode, completeISO){
+    const posDef = POSITIONS[person.positionKey];
+    if(!posDef) return false;
+    const norm = normCode(courseCode);
+    const all = adminCourseRows(posDef.courseKey, positionRefDate(person));
+    const match = all.find(it=>normCode(it.code)===norm);
+    if(!match) return false;
+    const ist = itemState(person, match.id);
+    ist.status = "Passed";
+    ist.actualDate = completeISO;
+    return true;
+  }
   function parseMethodsImportWorkbook(wb){
-    const result = { updated: [], unmatchedPeople: new Set(), unmatchedMethods: new Set(), rows: 0 };
+    const result = {
+      updated: [], unmatchedPeople: new Set(), unmatchedMethods: new Set(), rows: 0,
+      coursesUpdated: [], unmatchedCourses: new Set(),
+    };
     wb.SheetNames.forEach(sheetName=>{
       const sheet = wb.Sheets[sheetName];
       const rows = XLSX.utils.sheet_to_json(sheet, { header:1, raw:false, defval:"" });
@@ -2483,10 +2543,13 @@
             if(currentName) break;
           }
         }
-        // A CL-T-XXXX-XXXX Document No. cell marks a data row for one test method; the small
-        // Competency summary table (General/Functional) has no such cell and is skipped naturally.
+        // A CL-T-XXXX-XXXX Document No. cell (Description column) marks a test-method row; a
+        // Lab-XX-XX-XXX cell (Course column) marks a curriculum-course row — a row can carry either
+        // or both. The small Competency summary table (General/Functional) has neither and is
+        // skipped naturally, same as any other row this file has that matches neither pattern.
         const docCell = cells.find(c=>/^CL-T-\d{4}-\d{4}$/i.test(c));
-        if(!docCell) return;
+        const courseCell = cells.find(c=>/^Lab-\d{2}-\d{2}-\d{3}$/i.test(c));
+        if(!docCell && !courseCell) return;
         result.rows++;
         if(!currentName) return; // no person context yet — can't attribute this row
         const dates = cells.map(parseImportDateCell).filter(Boolean);
@@ -2495,10 +2558,15 @@
         if(!completeISO) return; // nothing to import for this row
         const person = findPersonByName(currentName);
         if(!person){ result.unmatchedPeople.add(currentName); return; }
-        const methodId = Object.keys(STATE.methods).find(id=>id.toLowerCase()===docCell.toLowerCase()) || null;
-        if(!methodId){ result.unmatchedMethods.add(docCell); return; }
-        applyMethodsImportRow(person, methodId, completeISO, retrainISO);
-        result.updated.push({ person: person.name, methodId, completeISO, retrainISO });
+        if(docCell){
+          const methodId = Object.keys(STATE.methods).find(id=>id.toLowerCase()===docCell.toLowerCase()) || null;
+          if(!methodId) result.unmatchedMethods.add(docCell);
+          else { applyMethodsImportRow(person, methodId, completeISO, retrainISO); result.updated.push({ person: person.name, methodId, completeISO, retrainISO }); }
+        }
+        if(courseCell){
+          if(applyCourseImportRow(person, courseCell, completeISO)) result.coursesUpdated.push({ person: person.name, code: courseCell, completeISO });
+          else result.unmatchedCourses.add(courseCell);
+        }
       });
     });
     return result;
@@ -2511,10 +2579,15 @@
     const byPerson = {};
     result.updated.forEach(u=>{ byPerson[u.person] = (byPerson[u.person]||0) + 1; });
     const peopleCount = Object.keys(byPerson).length;
+    const byCoursePerson = {};
+    result.coursesUpdated.forEach(u=>{ byCoursePerson[u.person] = (byCoursePerson[u.person]||0) + 1; });
+    const coursePeopleCount = Object.keys(byCoursePerson).length;
     let msg = `Import from "${filename}": ${result.updated.length} test-method record(s) updated across ${peopleCount} ${peopleCount===1?'person':'people'}.`;
+    if(result.coursesUpdated.length) msg += `\n${result.coursesUpdated.length} course(s) on the Planner/Schedule tab marked Passed across ${coursePeopleCount} ${coursePeopleCount===1?'person':'people'} (matched by course code, any position).`;
     if(result.unmatchedPeople.size) msg += `\nName(s) in the file not found in the roster (resigned/rotated/promoted people, or a spelling mismatch, both read the same way — check against "Manage test methods"/the People table if unexpected): ${Array.from(result.unmatchedPeople).join(", ")}.`;
     if(result.unmatchedMethods.size) msg += `\nDocument No.(s) not found in the test-method catalog: ${Array.from(result.unmatchedMethods).join(", ")}.`;
-    if(!result.updated.length && !result.unmatchedPeople.size && !result.unmatchedMethods.size) msg += `\nNo "Name:" + CL-T-xxxx-xxxx rows were recognized — check the file matches the expected export format.`;
+    if(result.unmatchedCourses.size) msg += `\nCourse code(s) not found in the matched person's current curriculum (company-wide training this tracker doesn't cover, or a course from a position they've since rotated out of): ${Array.from(result.unmatchedCourses).join(", ")}.`;
+    if(!result.updated.length && !result.coursesUpdated.length && !result.unmatchedPeople.size && !result.unmatchedMethods.size && !result.unmatchedCourses.size) msg += `\nNo "Name:" + CL-T-xxxx-xxxx or Lab-xx-xx-xxx rows were recognized — check the file matches the expected export format.`;
     return msg;
   }
   function handleMethodsImportFile(file){
@@ -2525,7 +2598,7 @@
         const wb = XLSX.read(data, { type:"array" });
         const result = parseMethodsImportWorkbook(wb);
         personMethodsUi.importMsg = buildMethodsImportSummary(result, file.name);
-        if(result.updated.length) scheduleSave();
+        if(result.updated.length || result.coursesUpdated.length) scheduleSave();
         paint();
       } catch(err){
         personMethodsUi.importMsg = `Could not read "${file.name}": ${err && err.message ? err.message : err}`;
@@ -2547,7 +2620,7 @@
         const result = parseMethodsImportWorkbook(wb);
         dashImportMsg = buildMethodsImportSummary(result, file.name);
         view = "dashboard";
-        if(result.updated.length) scheduleSave();
+        if(result.updated.length || result.coursesUpdated.length) scheduleSave();
         paint();
       } catch(err){
         dashImportMsg = `Could not read "${file.name}": ${err && err.message ? err.message : err}`;
