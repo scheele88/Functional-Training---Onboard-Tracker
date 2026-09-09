@@ -3041,14 +3041,8 @@
           const id = btn.getAttribute("data-admin-remove");
           if(adminRemoveConfirmId===id){
             const list = STATE.customCourses||[];
-            const item = list.find(it=>it.id===id);
-            if(item && item.positions){
-              delete item.positions[adminCourseKey];
-              if(Object.keys(item.positions).length===0){
-                const idx = list.indexOf(item);
-                if(idx>=0) list.splice(idx,1);
-              }
-            }
+const idx = list.findIndex(it=>it.id===id);
+if(idx>=0) list.splice(idx,1);
             adminRemoveConfirmId = null;
             scheduleSave();
           } else {
