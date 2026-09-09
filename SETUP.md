@@ -448,7 +448,7 @@ duplicate rows on anyone's Planner/Schedule tab any more — a hard refresh will
 
 ## Course/document codes are now enforced unique, and test-method re-evaluation warnings are now truly Analyst-only (v3.13)
 
-Two more follow-ups, both preventive/correctness fixes:
+Three more follow-ups:
 
 **1. Course and document codes are now enforced unique.** You pointed out that a training code (e.g.
 `Lab-01-01-001`) and a Document/Test Method No. (e.g. `CL-T-2000-0001`, `CL-M-1000-0001`) should never
@@ -478,6 +478,20 @@ database itself. A future Excel import will also no longer write new re-evaluati
 non-Analyst person matched in the file; the import summary banner will say how many rows were skipped
 for that reason (their Planner/Schedule course entries, which aren't Analyst-only, are still updated as
 before).
+
+**3. Target dates now show the end of the scheduled week, not the start.** You flagged this from a new
+Gas analyst's page (Pham Vu Thanh, started 07 Sep 2026): the Week 1 course showed a target date of
+07 Sep 2026 — identical to the Start Date — when it should read as the deadline by which that week's
+course is due, i.e. one week later. The formula previously computed a course's target date as `Start
+Date + (Week − 1) × 7 days`, which gives the date the week *begins* rather than the date it *ends* — so
+every Week 1 course always showed the start date verbatim, Week 2 showed start+7, and so on, one week
+earlier than you'd expect. **It's now `Start Date + Week × 7 days`** — Week 1 → start+7 days, Week 2 →
+start+14 days, etc. — confirmed with you directly. This applies the same way to Phase 3's approximate
+week-based pacing, so every phase now uses the same "end of the scheduled week" convention. This does
+shift every course's target date one week later than before (and, correspondingly, the point at which
+an unfinished course is flagged Overdue) — nothing else about the schedule changed: which week a course
+falls in, its status, and the Gantt bar it's shown on are unaffected. The hint text on each person's page
+("target date = that date + Week × 7 days (end of that week)") reflects this directly.
 
 ## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
@@ -658,7 +672,11 @@ Lead Engineer, Senior Engineer), each carrying the same long-overdue test-method
 had left in their data, now correctly show no method-related warning on the Flag column, are correctly
 excluded from the dashboard's "Test methods needing attention" tile and its click-to-filter list, while
 a mocked Analyst (Gas) with the identical underlying data still correctly shows the warning — confirming
-the fix is scoped by position, not by deleting or altering any of the underlying records. The full
+the fix is scoped by position, not by deleting or altering any of the underlying records; and for the
+target-date fix — a mocked brand-new Gas analyst starting 07 Sep 2026 (matching your own screenshot)
+now correctly shows the Week 1 course's target date as 14 Sep 2026 (start + 7 days) instead of
+07 Sep 2026 (the start date itself), correctly carries through to Week 2 and beyond, and the course
+correctly isn't flagged Overdue while its new, later target date hasn't passed yet. The full
 pre-existing suite (v3.9–v3.12 included) was re-run afterward and confirmed to still pass. However, this
 sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*

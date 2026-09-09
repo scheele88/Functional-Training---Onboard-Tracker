@@ -839,14 +839,22 @@
   // `(0-1)*7 = -7 days before start`, a bogus always-in-the-past date that ignored the item's actual
   // bucket pacing entirely. Passing the SAME phase3WeekMap (see phase3WeekMapFor) into every caller
   // makes every one of them agree with the person's own page.
+  // v3.13 — per the user: "Week N" is a 7-day window, and the target date should be the END of that
+  // window (the deadline the course is due by), not the date the window begins — Week 1 was showing
+  // the person's own Start Date verbatim, which read as if nothing was due until a week LATER than
+  // that. Target date for Week N is now Start Date + N×7 days (Week 1 → start+7, Week 2 → start+14,
+  // etc.), confirmed with the user over the (start+(N-1)×7 vs. start+(N×7-1)) alternatives. Applies
+  // identically to Phase 3's approximate week number, which uses this same "N weeks after start"
+  // convention (see phase3ApproxWeeks) — kept in sync with the identical inline calc in
+  // renderGanttRows' own Phase 3 branch below.
   function targetDateStr(item, ist, startDateStr, phase3WeekMap){
     // Manual per-course reschedule takes precedence over the computed plan date.
     if(ist && ist.planOverride) return parseISO(ist.planOverride);
     if(item.phaseKey==="p4"){
       const approxWeek = phase3WeekMap ? (phase3WeekMap[item.id]||null) : null;
-      return (approxWeek && startDateStr) ? addDays(startDateStr,(approxWeek-1)*7) : null;
+      return (approxWeek && startDateStr) ? addDays(startDateStr,approxWeek*7) : null;
     }
-    return startDateStr ? addDays(startDateStr,(item.week-1)*7) : null;
+    return startDateStr ? addDays(startDateStr,item.week*7) : null;
   }
   function computeStatus(item, ist, startDateStr, phase3WeekMap){
     if(ist.status==="Passed") return "passed";
@@ -2375,7 +2383,9 @@
         const ist = itemState(person, item.id);
         const approxWeek = weekMap[item.id] || null;
         const posRef = positionRefDate(person);
-        const target = ist.planOverride ? parseISO(ist.planOverride) : (approxWeek && posRef ? addDays(posRef,(approxWeek-1)*7) : null);
+        // v3.13 — kept identical to targetDateStr's Phase 3 branch above (Start + N×7 days, the end of
+        // week N rather than its start).
+        const target = ist.planOverride ? parseISO(ist.planOverride) : (approxWeek && posRef ? addDays(posRef,approxWeek*7) : null);
         const status = computeStatusForTarget(ist, target);
         const monthLabel = phase3MonthLabel(meta, approxWeek);
         const bar = `<td class="wk-cell continuing-cell" colspan="${totalWeeks}"><span class="continuing-bar st-${status}" title="Source plan bucket: ${esc(item.postLabel||'—')}">${esc(monthLabel)}</span></td>`;
@@ -2455,7 +2465,7 @@
           <label>Position:</label>
           ${posPill(person.positionKey, POSITIONS[person.positionKey].label)}
           <button class="btn small" id="changePositionBtn">Change position</button>
-          <span class="hint">In this role since ${positionRefDate(person)?esc(fmtDate(parseISO(positionRefDate(person)))):'—'} · target date = that date + (Week − 1) × 7 days</span>
+          <span class="hint">In this role since ${positionRefDate(person)?esc(fmtDate(parseISO(positionRefDate(person)))):'—'} · target date = that date + Week × 7 days (end of that week)</span>
         </div>
         ${(person.positionHistory && person.positionHistory.length) ? `
         <div class="startdate-row" style="border-top:none">
