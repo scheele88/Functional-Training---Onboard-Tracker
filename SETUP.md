@@ -19,15 +19,16 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.11) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
+  (v3.12) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
   "Export Report", **"Test Methods — Competency & Re-evaluation Tracking (v3.6)"**, **"Re-evaluation
   tab, editable dates & Excel import (new, v3.7)"**, **"Test methods now scope to your current
   position, and Excel import now updates the Planner/Schedule tab too (v3.8)"**, **"Test-method
   relevance now uses your real curriculum data, Excel import now matches on either column, and the
   Flag/Methods columns are merged (v3.9)"**, **"Test-method relevance now also excludes
-  Polyolefins-section methods entirely (v3.10)"**, and **"Phase 3 (Continuing Plan) courses now
+  Polyolefins-section methods entirely (v3.10)"**, **"Phase 3 (Continuing Plan) courses now
   compute overdue status correctly, and the admin panel guards against adding one with no due date
-  (v3.11)"** below for what's new.
+  (v3.11)"**, and **"Removing a custom course now removes it everywhere it applies, not just the
+  open curriculum tab (v3.12)"** below for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -401,6 +402,45 @@ as its own ~6-8 week slice within the 6-month window. Once you switch the dashbo
 (all phases)", it will show correctly for anyone whose position started long enough ago for that slice
 to have passed.
 
+## Removing a custom course now removes it everywhere it applies, not just the open curriculum tab (v3.12)
+
+You reported two follow-ups on `HS-K-4000-001`:
+
+1. Even switched to "Full progress (all phases)", the Flag column still wasn't warning overdue.
+2. Deleting the course in "Manage courses" only removed it from Luu Van Khue's (Section Manager) page —
+   it stayed on everyone else's.
+
+**On (1):** I reproduced the exact data behind your account (read directly from the database) in an
+automated test and confirmed the v3.11 fix does compute "overdue" correctly for people who should be
+overdue on this course — e.g. Nguyen Dinh Vinh and Pham Van Tuan, both still "Not Started" with
+positions effective since 2023, both now correctly flag overdue under "Full progress (all phases)". I
+couldn't reproduce "no warning at all" against your real data, so if you're still seeing that, it's
+most likely one of: (a) the Progress-basis dropdown reset back to "Probation progress (Ph.1+2)" — it
+doesn't remember your choice across a page reload; or (b) your browser or Render is serving a cached
+copy of the old page — try a hard refresh (Ctrl+Shift+R / Cmd+Shift+R). If it's still not warning for a
+*specific* person after that, tell me who and I'll check that person's data directly.
+
+**On (2), the actual bug — fixed:** the "Remove" button on a custom course only ever deleted it from
+whichever curriculum tab was open when you clicked it (a pre-existing design from early on, meant for a
+narrower case). Since `HS-K-4000-001` was added to all 6 positions in one "Applies to" action, deleting
+it from the SM tab only cleared SM, leaving it live on SS/Eng/Gas/Oil/Utility — exactly what you saw.
+
+- **Remove now deletes the course from every curriculum it applies to, in one confirmed click** —
+  matching the fact that it was added everywhere in one action.
+- A new, separately-labeled **"Only remove from `<curriculum>`"** button appears next to Remove
+  whenever a custom course applies to more than one curriculum, for the rarer case where you want to
+  pare a course down to fewer curricula without deleting it everywhere.
+
+**Data cleanup needed:** while investigating (2) I found that repeated attempts to fix the missing "SM"
+assignment had left three separate database entries for `HS-K-4000-001` — the original (with the real
+"Passed" records already on it), plus two near-duplicates created afterward, none of which include SM
+either. I have **not** changed anything in the database — this needs your go-ahead since it touches
+live records for several people. I can run a one-time correction that: keeps the original entry (so
+nobody's already-recorded "Passed" status is disturbed), adds SM to it so it finally covers all 6
+positions as intended, and removes the two duplicate entries. Let me know and I'll run it, or you can
+now do the equivalent yourself with the fixed Remove button (delete the two duplicates, then re-add SM
+via a fresh "Add course" covering just SM) — though the database-side fix avoids re-typing anything.
+
 ## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
 This is the same page as everything above — I originally built this as a separate app and separate
@@ -557,7 +597,15 @@ also drives the "Overdue" chip on that person's own Planner/Schedule row, confir
 agree; and in the "Manage courses" admin panel, the Bucket field's datalist correctly lists the Gas
 curriculum's existing bucket labels, and attempting to save a new Phase 3 course with an empty Bucket
 is correctly blocked while one with a Bucket fills in saves normally — the full pre-existing suite was
-re-run afterward (v3.9 and v3.10's suites included) and confirmed to still pass. However, this
+re-run afterward (v3.9 and v3.10's suites included) and confirmed to still pass; and new for v3.12 — I
+first re-ran the v3.11 check against a mock built from the *current* live data (both duplicate
+`HS-K-4000-001` entries as they exist in the database right now) and confirmed the dashboard already
+correctly flags Nguyen Dinh Vinh and Pham Van Tuan as overdue on it under "Full progress (all phases)",
+ruling out a remaining calculation bug; then, for the Remove fix, a custom course applied to three
+curricula (SM/SS/Gas) correctly disappears from all three after one confirmed click of "Remove" on any
+one of them, while a second course clicked through the new "Only remove from `<curriculum>`" action
+instead disappears from just that curriculum and stays live on the other two — the full pre-existing
+suite (v3.9, v3.10, v3.11 included) was re-run afterward and confirmed to still pass. However, this
 sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
