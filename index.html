@@ -200,6 +200,9 @@
   .flag-chip.ontrack{ background:var(--passed-soft); color:var(--passed-ink); }
   .flag-chip.none{ background:var(--surface-3); color:var(--ink-faint); }
   .flag-chip.resigned{ background:var(--hold-soft); color:var(--hold-ink); }
+  .flag-chip.status-newcomer{ background:var(--accent-soft); color:var(--accent-soft-ink); }
+  .flag-chip.status-rotation{ background:var(--progress-soft); color:var(--progress-ink); }
+  .flag-chip.status-others{ background:var(--surface-3); color:var(--ink-faint); }
   table.people tr.row-resigned td{ opacity:.62; }
   table.people tr.row-resigned:hover td{ opacity:1; }
   .empty-state{ padding:40px 24px; text-align:center; color:var(--ink-muted); }
@@ -534,7 +537,7 @@
   let selectedPersonId = null;
   let addFormOpen = false;
   let removeConfirmId = null;   // person id currently showing "click again to remove"
-  let dashFilters = { position: "all", flag: "all", search: "", employment: "active" };
+  let dashFilters = { position: "all", flag: "all", search: "", employment: "active", personStatus: "all" };
   let selectedPeopleIds = new Set();  // dashboard multi-select for the compare panel (not persisted)
   let drillFilter = null;             // "in_progress" | "overdue" | "passed" | null
   let saveTimer = null;
@@ -790,6 +793,33 @@
     const pct = total? Math.round(counts.passed/total*100) : 0;
     return Object.assign({total, pct}, counts);
   }
+  // Per-person report/roster classification (added v3.3) — feeds both the People table's Status
+  // column and the Export Report's Newcomers/Rotated scoping, so both always agree with each other.
+  // Defaults to an auto-detected value (so nothing needs setting for anyone already in the tracker)
+  // but can be hand-overridden per person via person.statusOverride ("" = auto).
+  const PERSON_STATUS_LABELS = { newcomer:"Newcomer", rotation:"Rotation", others:"Others" };
+  const PERSON_STATUS_VALUES = ["newcomer","rotation","others"];
+  function autoPersonStatus(person){
+    // Rotation takes priority over Newcomer when both would apply (e.g. someone who just rotated
+    // and hasn't finished the new position's Phase 1+2 yet) — the rotation is the more specific,
+    // more useful thing to say about them; the override is always there if a different call is wanted.
+    if(person.positionHistory && person.positionHistory.length) return "rotation";
+    if(personProgress(person).pct < 100) return "newcomer";
+    return "others";
+  }
+  function resolvedPersonStatus(person){
+    if(person.statusOverride && PERSON_STATUS_VALUES.indexOf(person.statusOverride)>=0) return person.statusOverride;
+    return autoPersonStatus(person);
+  }
+  // "Oil → Gas"-style summary of a person's most recent rotation, reusing the Position History that
+  // Change Position already records — not a separate field to keep in sync.
+  function rotationFromTo(person){
+    if(!(person.positionHistory && person.positionHistory.length)) return "";
+    const last = person.positionHistory[person.positionHistory.length-1];
+    const fromLabel = (POSITIONS[last.positionKey] && POSITIONS[last.positionKey].label) || last.positionKey;
+    const toLabel = POSITIONS[person.positionKey].label;
+    return `${fromLabel} → ${toLabel}`;
+  }
   function personFull(person){
     // Every course in the person's curriculum, all phases (1, 2 and 4) — unlike personProgress,
     // which intentionally scopes to the probation-critical subset (Phase 1+2) only.
@@ -835,7 +865,8 @@
       start_date: p.startDate||"", notes: p.notes||"", employment_status: p.employmentStatus||"Active",
       end_date: p.endDate||"", items: p.items||{},
       position_effective_date: p.positionEffectiveDate || p.startDate || "",
-      position_history: p.positionHistory || []
+      position_history: p.positionHistory || [],
+      status_override: p.statusOverride || ""
     };
   }
   async function loadFromSupabase(){
@@ -862,7 +893,8 @@
           notes: r.notes||"", employmentStatus: r.employment_status||"Active", endDate: r.end_date||"",
           items: r.items||{}, createdAt: r.created_at||toISO(new Date()),
           positionEffectiveDate: r.position_effective_date || r.start_date || "",
-          positionHistory: r.position_history || []
+          positionHistory: r.position_history || [],
+          statusOverride: r.status_override || ""
         };
       });
       const settingsMap = {};
@@ -1031,14 +1063,19 @@
 
   // ---------- Export Report (PPTX, 16:9) ----------
   // Client-side PPTX generation via the PptxGenJS browser bundle (loaded from CDN in <head>) — no
-  // server involved, matching the rest of this app's architecture. Design tokens below mirror the
-  // dark navy/teal/amber PptxGenJS template already used for this lab's other decks (Cambria titles,
-  // Tahoma body, 16:9 widescreen), prototyped and visually QA'd (LibreOffice render) before porting.
+  // server involved, matching the rest of this app's architecture. v3.4 restyled every report page
+  // (everything but the cover) to read as a Power BI report: light canvas, bordered/shadowed white
+  // "visual" cards with their own mini title, KPI cards, and each scope consolidated onto a single
+  // dashboard page (KPI row + two chart cards) with the detail roster/table pushed to its own
+  // page(s) — the way a real PBI report splits an Overview page from a Details page. Prototyped in
+  // Node and visually QA'd (LibreOffice render) before porting, per the established workflow.
   const RPT_COLOR = {
     navy:"0B1F3A", teal:"0D9488", tealLight:"5EEAD4", amber:"F59E0B", red:"DC2626", green:"16A34A",
-    white:"FFFFFF", ink:"1E293B", muted:"64748B", paper:"F8FAFC", line:"E2E8F0",
+    white:"FFFFFF", ink:"1E293B", muted:"64748B", mutedLight:"94A3B8",
+    canvas:"F3F2F1", card:"FFFFFF", border:"D9D9D9",
   };
-  const RPT_FONT_TITLE = "Cambria", RPT_FONT_BODY = "Tahoma";
+  const RPT_FONT_TITLE = "Cambria";  // cover slide only
+  const RPT_FONT_BODY = "Tahoma";    // every report page, per house default font
   function rptDate(iso){ return iso ? fmtDate(parseISO(iso)) : "—"; }
   function rptStatusColor(status){
     if(status==="overdue") return RPT_COLOR.red;
@@ -1052,112 +1089,163 @@
     const status = pr.overdue>0 ? "overdue" : (pr.pct>=100 ? "complete" : "on_track");
     return { person:p, pct:pr.pct, overdueCount:pr.overdue, status };
   }
-  function rptSectionDivider(pres, title, subtitle){
-    const s = pres.addSlide();
-    s.background = { color: RPT_COLOR.navy };
-    s.addShape("rect", { x:0, y:3.15, w:1.4, h:0.09, fill:{color:RPT_COLOR.teal} });
-    s.addText(title, { x:0.7, y:3.3, w:12, h:1, fontFace:RPT_FONT_TITLE, fontSize:36, bold:true, color:RPT_COLOR.white });
-    if(subtitle) s.addText(subtitle, { x:0.7, y:4.15, w:12, h:0.5, fontFace:RPT_FONT_BODY, fontSize:16, color:RPT_COLOR.tealLight });
+  // ---- Power BI-style report chrome ----
+  function pbiHeader(s, title, scopeLabel, subtitle){
+    s.background = { color: RPT_COLOR.canvas };
+    s.addShape("rect", { x:0, y:0, w:13.33, h:0.06, fill:{color:RPT_COLOR.navy} });
+    s.addShape("rect", { x:0, y:0.06, w:13.33, h:0.72, fill:{color:RPT_COLOR.card}, line:{color:RPT_COLOR.border, width:0.75} });
+    s.addText(title, { x:0.45, y:0.14, w:8.6, h:0.5, fontFace:RPT_FONT_BODY, fontSize:19, bold:true, color:RPT_COLOR.ink, valign:"middle" });
+    if(scopeLabel){
+      s.addShape("rect", { x:10.18, y:0.2, w:2.7, h:0.44, fill:{color:RPT_COLOR.card}, line:{color:RPT_COLOR.teal, width:1.25} });
+      s.addText(scopeLabel.toUpperCase(), { x:10.18, y:0.2, w:2.7, h:0.44, align:"center", valign:"middle", fontFace:RPT_FONT_BODY, fontSize:10, bold:true, color:RPT_COLOR.teal, charSpacing:1 });
+    }
+    if(subtitle) s.addText(subtitle, { x:0.45, y:0.84, w:12.4, h:0.3, fontFace:RPT_FONT_BODY, fontSize:10.5, color:RPT_COLOR.muted });
   }
-  function rptHeader(s, title, scopeLabel){
-    s.background = { color: RPT_COLOR.white };
-    s.addShape("rect", { x:0, y:0, w:13.33, h:0.9, fill:{color:RPT_COLOR.navy} });
-    s.addText(title, { x:0.45, y:0.12, w:9.5, h:0.66, fontFace:RPT_FONT_TITLE, fontSize:20, bold:true, color:RPT_COLOR.white, valign:"middle" });
-    if(scopeLabel) s.addText(scopeLabel, { x:10.0, y:0.12, w:3.0, h:0.66, fontFace:RPT_FONT_BODY, fontSize:11, color:RPT_COLOR.tealLight, align:"right", valign:"middle" });
+  function pbiFooter(s, pageNote){
+    s.addText("Olefins & UT Analyst Section — Long Son Petrochemicals Central Laboratory", { x:0.45, y:7.18, w:9.0, h:0.28, fontFace:RPT_FONT_BODY, fontSize:8.5, color:RPT_COLOR.mutedLight });
+    if(pageNote) s.addText(pageNote, { x:10.0, y:7.18, w:2.9, h:0.28, fontFace:RPT_FONT_BODY, fontSize:8.5, color:RPT_COLOR.mutedLight, align:"right" });
   }
-  function rptFooter(s, pageNote){
-    s.addText("Olefins & UT Analyst Section — Long Son Petrochemicals Central Laboratory", { x:0.45, y:7.15, w:9.0, h:0.3, fontFace:RPT_FONT_BODY, fontSize:9, color:RPT_COLOR.muted });
-    if(pageNote) s.addText(pageNote, { x:10.0, y:7.15, w:2.9, h:0.3, fontFace:RPT_FONT_BODY, fontSize:9, color:RPT_COLOR.muted, align:"right" });
+  // Draws a card panel (border + soft shadow — strictly a rectangle, no rounded corners); returns
+  // the y where the card's own content should start, below its mini title when one is given.
+  function pbiCard(s, x, y, w, h, cardTitle){
+    s.addShape("rect", { x, y, w, h, fill:{color:RPT_COLOR.card}, line:{color:RPT_COLOR.border, width:0.75},
+      shadow:{ type:"outer", color:"605E5C", opacity:0.16, blur:4, offset:2, angle:90 } });
+    if(cardTitle){
+      s.addText(cardTitle, { x:x+0.22, y:y+0.12, w:w-0.44, h:0.32, fontFace:RPT_FONT_BODY, fontSize:11.5, bold:true, color:RPT_COLOR.ink });
+      s.addShape("line", { x:x+0.22, y:y+0.46, w:w-0.44, h:0, line:{color:RPT_COLOR.border, width:0.75} });
+      return y + 0.58;
+    }
+    return y + 0.16;
   }
-  function rptKpiTile(s, x, y, w, h, value, label, accent){
-    s.addShape("rect", { x, y, w, h, fill:{color:RPT_COLOR.paper}, line:{color:RPT_COLOR.line, width:1} });
-    s.addShape("rect", { x, y, w:0.06, h, fill:{color:accent} });
-    s.addText(String(value), { x:x+0.2, y:y+0.12, w:w-0.4, h:h*0.55, fontFace:RPT_FONT_TITLE, fontSize:30, bold:true, color:RPT_COLOR.ink, valign:"bottom" });
-    s.addText(label, { x:x+0.2, y:y+h*0.62, w:w-0.4, h:h*0.35, fontFace:RPT_FONT_BODY, fontSize:11, color:RPT_COLOR.muted, valign:"top" });
+  function pbiKpiCard(s, x, y, w, h, value, label, accent){
+    s.addShape("rect", { x, y, w, h, fill:{color:RPT_COLOR.card}, line:{color:RPT_COLOR.border, width:0.75},
+      shadow:{ type:"outer", color:"605E5C", opacity:0.16, blur:4, offset:2, angle:90 } });
+    s.addShape("rect", { x, y, w:0.07, h, fill:{color:accent} });
+    s.addText(String(value), { x:x+0.26, y:y+0.14, w:w-0.44, h:h*0.52, fontFace:RPT_FONT_BODY, fontSize:26, bold:true, color:RPT_COLOR.ink, valign:"bottom" });
+    s.addText(label, { x:x+0.26, y:y+h*0.6, w:w-0.44, h:h*0.36, fontFace:RPT_FONT_BODY, fontSize:10, color:RPT_COLOR.muted, valign:"top" });
   }
-  function rptKpiSlide(pres, title, scopeLabel, kpis){
-    const s = pres.addSlide();
-    rptHeader(s, title, scopeLabel);
-    const n = kpis.length, gap = 0.3, totalW = 12.43, w = (totalW - gap*(n-1))/n;
-    kpis.forEach((k,i)=>rptKpiTile(s, 0.45+i*(w+gap), 1.5, w, 1.6, k.value, k.label, k.accent||RPT_COLOR.teal));
-    rptFooter(s);
+  function pbiKpiRow(s, kpis){
+    const totalW = 12.43, gap = 0.22, n = kpis.length, kw = (totalW - gap*(n-1))/n, y = 1.28, h = 1.1;
+    kpis.forEach((k,i)=>pbiKpiCard(s, 0.45+i*(kw+gap), y, kw, h, k.value, k.label, k.accent||RPT_COLOR.teal));
+    return y + h + 0.22; // y where the chart-card row starts
   }
-  function rptPositionTableSlide(pres, title, scopeLabel, rows){
-    const s = pres.addSlide();
-    rptHeader(s, title, scopeLabel);
-    const header = [
-      { text:"Position", options:{ bold:true, color:RPT_COLOR.white, fill:{color:RPT_COLOR.navy} } },
-      { text:"Headcount", options:{ bold:true, color:RPT_COLOR.white, fill:{color:RPT_COLOR.navy}, align:"center" } },
-      { text:"Avg. Probation %", options:{ bold:true, color:RPT_COLOR.white, fill:{color:RPT_COLOR.navy}, align:"center" } },
-      { text:"Overdue courses", options:{ bold:true, color:RPT_COLOR.white, fill:{color:RPT_COLOR.navy}, align:"center" } },
-    ];
-    const body = rows.map((r,i)=>[
-      { text:r.label, options:{ fill:{color:i%2?RPT_COLOR.paper:RPT_COLOR.white} } },
-      { text:String(r.headcount), options:{ align:"center", fill:{color:i%2?RPT_COLOR.paper:RPT_COLOR.white} } },
-      { text:`${r.avgPct}%`, options:{ align:"center", fill:{color:i%2?RPT_COLOR.paper:RPT_COLOR.white}, color:r.avgPct>=80?RPT_COLOR.green:(r.avgPct>=50?RPT_COLOR.amber:RPT_COLOR.red), bold:true } },
-      { text:String(r.overdue), options:{ align:"center", fill:{color:i%2?RPT_COLOR.paper:RPT_COLOR.white}, color:r.overdue>0?RPT_COLOR.red:RPT_COLOR.muted } },
-    ]);
-    // Row height is capped rather than fixed, so a table with few rows in scope doesn't stretch its
-    // rows to fill a fixed area (looked bloated during visual QA) — see rptRosterTableSlides below.
-    const rowH = 0.55;
-    s.addTable([header, ...body], {
-      x:0.45, y:1.3, w:12.43, h:Math.min(5.5, rowH*(rows.length+1)),
-      fontFace:RPT_FONT_BODY, fontSize:12, border:{type:"solid", color:RPT_COLOR.line, pt:0.75},
-      autoPage:false, colW:[5.5, 2.31, 2.31, 2.31],
+  // Compact "preview list" — a small mini progress-bar table so a dashboard's second card carries
+  // real per-person data instead of empty space, with a note pointing to the full detail page.
+  function pbiPreviewList(s, x, y, w, rows, moreCount, moreLabel){
+    let ry = y + 0.06;
+    const rowH = 0.42;
+    rows.forEach(r=>{
+      s.addText(r.name, { x, y:ry, w:w*0.42, h:rowH, fontFace:RPT_FONT_BODY, fontSize:10.5, bold:true, color:RPT_COLOR.ink, valign:"middle" });
+      const barX = x+w*0.44, barW = w*0.4, barH = 0.14;
+      s.addShape("rect", { x:barX, y:ry+rowH/2-barH/2, w:barW, h:barH, fill:{color:"E9ECEF"} });
+      s.addShape("rect", { x:barX, y:ry+rowH/2-barH/2, w:barW*Math.max(0.03,Math.min(1,r.pct/100)), h:barH, fill:{color:r.color} });
+      s.addText(r.sub, { x:x+w*0.86, y:ry, w:w*0.14, h:rowH, align:"right", fontFace:RPT_FONT_BODY, fontSize:10.5, bold:true, color:r.color, valign:"middle" });
+      ry += rowH;
     });
-    rptFooter(s);
+    if(moreCount>0) s.addText(moreLabel || `+ ${moreCount} more — see the detail page`, { x, y:ry+0.06, w, h:0.3, fontFace:RPT_FONT_BODY, fontSize:9.5, italic:true, color:RPT_COLOR.mutedLight });
   }
-  // Paginates a person roster table across as many slides as needed (12 rows/slide fits 16:9 with
-  // this row height and font size without overflowing — confirmed via LibreOffice render).
-  function rptRosterTableSlides(pres, title, scopeLabel, columns, rows, rowsPerSlide){
-    rowsPerSlide = rowsPerSlide || 12;
+  function pbiDonutCard(s, x, y, w, h, cardTitle, labels, values, colors, centerLabel){
+    const topY = pbiCard(s, x, y, w, h, cardTitle);
+    const total = values.reduce((a,b)=>a+b,0);
+    const size = 2.6;
+    s.addChart(pres_ChartType_doughnut(), [{ name:"Status", labels, values }], {
+      x:x+0.25, y:topY+0.05, w:size, h:size, chartColors: colors,
+      showLegend:false, showValue:false, showPercent:false,
+      dataBorder:{ pt:1.5, color:RPT_COLOR.card }, holeSize:61,
+    });
+    s.addText(String(total), { x:x+0.25, y:topY+size*0.36, w:size, h:size*0.3, align:"center", fontFace:RPT_FONT_BODY, fontSize:20, bold:true, color:RPT_COLOR.ink });
+    s.addText(centerLabel, { x:x+0.25, y:topY+size*0.6, w:size, h:0.25, align:"center", fontFace:RPT_FONT_BODY, fontSize:9, color:RPT_COLOR.muted });
+    let ly = topY + (labels.length<=2 ? 0.3 : 0.12);
+    const legendX = x + size + 0.55;
+    labels.forEach((label,i)=>{
+      const v = values[i], pct = total ? Math.round(v/total*100) : 0, color = colors[i];
+      s.addShape("rect", { x:legendX, y:ly+0.06, w:0.16, h:0.16, fill:{color} });
+      s.addText(label, { x:legendX+0.26, y:ly, w:1.6, h:0.3, fontFace:RPT_FONT_BODY, fontSize:11, bold:true, color:RPT_COLOR.ink, valign:"middle" });
+      s.addText(`${v} (${pct}%)`, { x:legendX+1.7, y:ly, w:1.5, h:0.3, fontFace:RPT_FONT_BODY, fontSize:11, bold:true, color, align:"right", valign:"middle" });
+      ly += 0.5;
+    });
+    return topY;
+  }
+  // PptxGenJS exposes ChartType off the presentation instance, not as a module export — this small
+  // helper lets pbiDonutCard stay a top-level function without threading `pres` through every call.
+  let __pres_for_charttype = null;
+  function pres_ChartType_doughnut(){ return __pres_for_charttype.ChartType.doughnut; }
+  // ---- Detail table page(s) — Position Breakdown / rosters / rotation history. Paginates across
+  // as many slides as needed; 13 rows/slide fits the card at this row height (confirmed via render).
+  function pbiTableSlides(pres, title, scopeLabel, subtitle, columns, rows, rowsPerSlide){
+    rowsPerSlide = rowsPerSlide || 13;
     const pages = Math.max(1, Math.ceil(rows.length/rowsPerSlide));
     for(let p=0; p<pages; p++){
       const s = pres.addSlide();
-      rptHeader(s, title, scopeLabel);
+      pbiHeader(s, title, scopeLabel, subtitle);
+      const tableTopY = pbiCard(s, 0.45, 1.2, 12.43, 5.75, null);
       const pageRows = rows.slice(p*rowsPerSlide, (p+1)*rowsPerSlide);
-      const header = columns.map(c=>({ text:c.label, options:{ bold:true, color:RPT_COLOR.white, fill:{color:RPT_COLOR.navy}, align:c.align||"left" } }));
+      const header = columns.map(c=>({ text:c.label, options:{ bold:true, color:RPT_COLOR.ink, fill:{color:"EDEEF0"}, align:c.align||"left", fontSize:11 } }));
       const body = pageRows.map((r,i)=>columns.map(c=>({
         text: c.value(r),
-        options: {
-          align: c.align||"left",
-          fill: { color: i%2?RPT_COLOR.paper:RPT_COLOR.white },
-          color: c.color ? c.color(r) : RPT_COLOR.ink,
-          bold: !!(c.bold && c.bold(r)),
-        },
+        options: { align:c.align||"left", fill:{color:i%2?"FAFAFA":RPT_COLOR.card}, color:c.color?c.color(r):RPT_COLOR.ink, bold:!!(c.bold && c.bold(r)), fontSize:10.5 },
       })));
-      const rowH = 0.42;
+      const rowH = 0.4;
       s.addTable([header, ...body], {
-        x:0.45, y:1.3, w:12.43, h:Math.min(5.5, rowH*(pageRows.length+1)),
-        fontFace:RPT_FONT_BODY, fontSize:11, border:{type:"solid", color:RPT_COLOR.line, pt:0.5},
+        x:0.65, y:tableTopY, w:12.03, h:Math.min(5.6-(tableTopY-1.2), rowH*(pageRows.length+1)),
+        fontFace:RPT_FONT_BODY, border:{ type:"solid", color:RPT_COLOR.border, pt:0.5 },
         autoPage:false, colW:columns.map(c=>c.w),
       });
-      rptFooter(s, pages>1 ? `Page ${p+1} of ${pages}` : null);
+      pbiFooter(s, pages>1 ? `Page ${p+1} of ${pages}` : null);
     }
   }
 
   function rptBuildOverall(pres, active){
-    rptSectionDivider(pres, "Overall Results", `Olefins & UT Analyst Section — ${active.length} active people`);
+    __pres_for_charttype = pres;
     const stats = active.map(rptPersonStats);
     const total = stats.length;
     const overdue = stats.filter(s=>s.status==="overdue").length;
     const onTrack = stats.filter(s=>s.status!=="overdue").length;
     const avgPct = Math.round(stats.reduce((s,x)=>s+x.pct,0)/(total||1));
-    rptKpiSlide(pres, "Section Summary", "Overall Results", [
-      { value:total, label:"Active people", accent:RPT_COLOR.teal },
-      { value:`${avgPct}%`, label:"Avg. probation completion", accent:RPT_COLOR.teal },
-      { value:onTrack, label:"On track", accent:RPT_COLOR.green },
-      { value:overdue, label:"Overdue", accent:RPT_COLOR.red },
-    ]);
+    const statusCounts = { newcomer:0, rotation:0, others:0 };
+    active.forEach(p=>{ statusCounts[resolvedPersonStatus(p)]++; });
     const byPos = POSITION_ORDER.map(pk=>{
       const mine = stats.filter(s=>s.person.positionKey===pk);
       const avg = mine.length ? Math.round(mine.reduce((s,x)=>s+x.pct,0)/mine.length) : 0;
       const od = mine.filter(s=>s.status==="overdue").length;
       return { label:POSITIONS[pk].label, headcount:mine.length, avgPct:avg, overdue:od };
     }).filter(r=>r.headcount>0);
-    rptPositionTableSlide(pres, "Progress by Position", "Overall Results", byPos);
+
+    // Overview dashboard — one page: KPI row + status-composition donut + probation-by-position bar.
+    const s = pres.addSlide();
+    pbiHeader(s, "Overall Results", "Overall Results", `Olefins & UT Analyst Section — ${total} active people`);
+    const rowY = pbiKpiRow(s, [
+      { value:total, label:"Active people", accent:RPT_COLOR.teal },
+      { value:`${avgPct}%`, label:"Avg. probation completion", accent:RPT_COLOR.teal },
+      { value:onTrack, label:"On track", accent:RPT_COLOR.green },
+      { value:overdue, label:"Overdue", accent:RPT_COLOR.red },
+    ]);
+    const rowH = 7.02 - rowY, cw = (12.43 - 0.22)/2;
+    pbiDonutCard(s, 0.45, rowY, cw, rowH, "Status Composition",
+      ["Newcomer","Rotation","Others"], [statusCounts.newcomer, statusCounts.rotation, statusCounts.others],
+      [RPT_COLOR.teal, RPT_COLOR.amber, RPT_COLOR.mutedLight], "active");
+    const c2x = 0.45+cw+0.22;
+    const c2TopY = pbiCard(s, c2x, rowY, cw, rowH, "Avg. Probation Completion by Position");
+    const ordered = byPos.slice().reverse(); // horizontal bar plots first category at the bottom
+    s.addChart(pres.ChartType.bar, [{ name:"Avg. Probation %", labels:ordered.map(r=>r.label), values:ordered.map(r=>r.avgPct) }], {
+      x:c2x+0.22, y:c2TopY, w:cw-0.44, h:rowY+rowH-c2TopY-0.22, barDir:"bar",
+      chartColors: ordered.map(r=>r.avgPct>=80?RPT_COLOR.green:(r.avgPct>=50?RPT_COLOR.amber:RPT_COLOR.red)), showLegend:false,
+      showValue:true, dataLabelColor:RPT_COLOR.ink, dataLabelFontFace:RPT_FONT_BODY, dataLabelFontSize:9.5, dataLabelPosition:"outEnd", dataLabelFormatCode:'0"%"',
+      catAxisLabelColor:RPT_COLOR.ink, catAxisLabelFontFace:RPT_FONT_BODY, catAxisLabelFontSize:9.5,
+      valAxisLabelColor:RPT_COLOR.mutedLight, valAxisLabelFontFace:RPT_FONT_BODY, valAxisLabelFontSize:8, valAxisMinVal:0, valAxisMaxVal:100,
+      catGridLine:{ style:"none" }, valGridLine:{ style:"solid", color:RPT_COLOR.border, size:0.5 }, barGapWidthPct:35,
+    });
+    pbiFooter(s);
+
+    // Detail pages
+    pbiTableSlides(pres, "Position Breakdown", "Overall Results", null, [
+      { label:"Position", value:r=>r.label, w:5.5 },
+      { label:"Headcount", value:r=>String(r.headcount), w:2.17, align:"center" },
+      { label:"Avg. Probation %", value:r=>`${r.avgPct}%`, w:2.17, align:"center", color:r=>r.avgPct>=80?RPT_COLOR.green:(r.avgPct>=50?RPT_COLOR.amber:RPT_COLOR.red), bold:()=>true },
+      { label:"Overdue courses", value:r=>String(r.overdue), w:2.17, align:"center", color:r=>r.overdue>0?RPT_COLOR.red:RPT_COLOR.muted },
+    ], byPos);
     const sorted = stats.slice().sort((a,b)=>POSITION_ORDER.indexOf(a.person.positionKey)-POSITION_ORDER.indexOf(b.person.positionKey) || (a.person.startDate||"").localeCompare(b.person.startDate||""));
-    rptRosterTableSlides(pres, "Active Roster", "Overall Results", [
+    pbiTableSlides(pres, "Active Roster", "Overall Results", null, [
       { label:"Name", value:r=>r.person.name, w:3.0 },
       { label:"Position", value:r=>POSITIONS[r.person.positionKey].label, w:3.2 },
       { label:"Start date", value:r=>rptDate(r.person.startDate), w:1.9, align:"center" },
@@ -1167,37 +1255,99 @@
   }
 
   function rptBuildNewcomers(pres, active){
-    const newcomers = active.map(rptPersonStats).filter(s=>s.pct<100);
-    rptSectionDivider(pres, "Newcomers", `${newcomers.length} people still completing probation-critical training`);
+    __pres_for_charttype = pres;
+    // Scoped by the same resolvedPersonStatus() the People table's Status column shows — auto-detected
+    // from probation % unless a person's Status has been manually set, so the two always agree.
+    const newcomers = active.filter(p=>resolvedPersonStatus(p)==="newcomer").map(rptPersonStats)
+      .sort((a,b)=>(a.person.startDate||"").localeCompare(b.person.startDate||""));
     const overdue = newcomers.filter(s=>s.status==="overdue").length;
+    const onTrack = newcomers.length - overdue;
     const avgPct = Math.round(newcomers.reduce((s,x)=>s+x.pct,0)/(newcomers.length||1));
-    rptKpiSlide(pres, "Newcomers Summary", "Newcomers", [
+
+    const s = pres.addSlide();
+    pbiHeader(s, "Newcomers", "Newcomers", `${newcomers.length} people still completing probation-critical training`);
+    const rowY = pbiKpiRow(s, [
       { value:newcomers.length, label:"Newcomers (in training)", accent:RPT_COLOR.teal },
       { value:`${avgPct}%`, label:"Avg. probation completion", accent:RPT_COLOR.teal },
       { value:overdue, label:"Overdue", accent:RPT_COLOR.red },
     ]);
-    rptRosterTableSlides(pres, "Newcomer Roster", "Newcomers", [
+    const rowH = 7.02 - rowY, cw = (12.43-0.22)/2;
+    pbiDonutCard(s, 0.45, rowY, cw, rowH, "On Track vs. Overdue", ["On track","Overdue"], [onTrack, overdue], [RPT_COLOR.green, RPT_COLOR.red], "newcomers");
+    const c2x = 0.45+cw+0.22;
+    const c2TopY = pbiCard(s, c2x, rowY, cw, rowH, "Newcomer Snapshot — Probation Completion");
+    const previewRows = 7;
+    const shown = newcomers.slice(0, previewRows).map(r=>({
+      name:r.person.name, pct:r.pct,
+      color: r.status==="overdue" ? RPT_COLOR.red : (r.pct>=80?RPT_COLOR.green:RPT_COLOR.amber),
+      sub: `${r.pct}%`,
+    }));
+    pbiPreviewList(s, c2x+0.25, c2TopY+0.06, cw-0.5, shown, Math.max(0, newcomers.length-previewRows), `+ ${Math.max(0, newcomers.length-previewRows)} more — see the Newcomer Roster page`);
+    pbiFooter(s);
+
+    pbiTableSlides(pres, "Newcomer Roster", "Newcomers", null, [
       { label:"Name", value:r=>r.person.name, w:2.8 },
       { label:"Position", value:r=>POSITIONS[r.person.positionKey].label, w:3.0 },
       { label:"Start date", value:r=>rptDate(r.person.startDate), w:1.8, align:"center" },
       { label:"Probation %", value:r=>`${r.pct}%`, w:1.7, align:"center", color:r=>r.pct>=80?RPT_COLOR.green:(r.pct>=50?RPT_COLOR.amber:RPT_COLOR.red), bold:()=>true },
       { label:"Overdue courses", value:r=>String(r.overdueCount), w:1.6, align:"center", color:r=>r.overdueCount>0?RPT_COLOR.red:RPT_COLOR.muted },
       { label:"Status", value:r=>r.status==="overdue"?"Overdue":"On track", w:1.53, align:"center", color:r=>rptStatusColor(r.status) },
-    ], newcomers.sort((a,b)=>(a.person.startDate||"").localeCompare(b.person.startDate||"")));
+    ], newcomers);
   }
 
   function rptBuildRotated(pres, active){
-    const rotated = active.filter(p=>p.positionHistory && p.positionHistory.length>0);
-    rptSectionDivider(pres, "Rotated Members", `${rotated.length} people with a recorded position change`);
-    rptKpiSlide(pres, "Rotation Summary", "Rotated Members", [
+    __pres_for_charttype = pres;
+    // Scoped by resolvedPersonStatus() rather than a raw positionHistory check, so a person manually
+    // flagged "Rotation" (e.g. a move that predates this tracker and was never logged via Change
+    // Position) is included too — see rotationFromTo() for how that edge case renders below.
+    const rotated = active.filter(p=>resolvedPersonStatus(p)==="rotation").slice().sort((a,b)=>a.name.localeCompare(b.name));
+    const byDestination = POSITION_ORDER.map(pk=>({ label:POSITIONS[pk].label, count:rotated.filter(r=>r.positionKey===pk).length })).filter(r=>r.count>0);
+    // Most-recent-first: sort by the effective date of each person's latest position-history entry.
+    const recentFirst = rotated.slice().sort((a,b)=>{
+      const da = (a.positionHistory && a.positionHistory.length) ? a.positionHistory[a.positionHistory.length-1].effectiveDate||"" : "";
+      const db = (b.positionHistory && b.positionHistory.length) ? b.positionHistory[b.positionHistory.length-1].effectiveDate||"" : "";
+      return db.localeCompare(da);
+    });
+
+    const s = pres.addSlide();
+    pbiHeader(s, "Rotated Members", "Rotated Members", `${rotated.length} people with a recorded position change`);
+    const rowY = pbiKpiRow(s, [
       { value:rotated.length, label:"People who have rotated", accent:RPT_COLOR.teal },
+      { value:byDestination.length, label:"Destination positions", accent:RPT_COLOR.teal },
     ]);
-    rptRosterTableSlides(pres, "Rotation History", "Rotated Members", [
-      { label:"Name", value:r=>r.name, w:2.6 },
-      { label:"Current position", value:r=>POSITIONS[r.positionKey].label, w:2.9 },
-      { label:"In role since", value:r=>rptDate(positionRefDate(r)), w:1.7, align:"center" },
-      { label:"History", value:r=>r.positionHistory.map(h=>`${(POSITIONS[h.positionKey]&&POSITIONS[h.positionKey].label)||h.positionKey} (${rptDate(h.effectiveDate)}–${rptDate(h.endDate)})`).join("  →  "), w:5.23 },
-    ], rotated.slice().sort((a,b)=>a.name.localeCompare(b.name)));
+    const rowH = 7.02 - rowY, cw = (12.43-0.22)/2;
+    const c1TopY = pbiCard(s, 0.45, rowY, cw, rowH, "Rotations by Destination Position");
+    if(byDestination.length){
+      const ordered = byDestination.slice().reverse();
+      s.addChart(pres.ChartType.bar, [{ name:"Rotations", labels:ordered.map(r=>r.label), values:ordered.map(r=>r.count) }], {
+        x:0.45+0.22, y:c1TopY, w:cw-0.44, h:rowY+rowH-c1TopY-0.22, barDir:"bar",
+        chartColors: ordered.map(()=>RPT_COLOR.teal), showLegend:false,
+        showValue:true, dataLabelColor:RPT_COLOR.ink, dataLabelFontFace:RPT_FONT_BODY, dataLabelFontSize:9.5, dataLabelPosition:"outEnd", dataLabelFormatCode:"0",
+        catAxisLabelColor:RPT_COLOR.ink, catAxisLabelFontFace:RPT_FONT_BODY, catAxisLabelFontSize:9.5,
+        valAxisHidden:true, valAxisMinVal:0,
+        catGridLine:{ style:"none" }, valGridLine:{ style:"none" }, barGapWidthPct:45,
+      });
+    } else {
+      s.addText("No rotations on record.", { x:0.45+0.25, y:c1TopY+0.1, w:cw-0.5, h:0.4, fontFace:RPT_FONT_BODY, fontSize:11, color:RPT_COLOR.muted });
+    }
+    const c2x = 0.45+cw+0.22;
+    const c2TopY = pbiCard(s, c2x, rowY, cw, rowH, "Recent Rotations");
+    let ry = c2TopY + 0.08;
+    const previewRows = 6;
+    recentFirst.slice(0, previewRows).forEach(r=>{
+      s.addText(r.name, { x:c2x+0.25, y:ry, w:cw*0.4, h:0.36, fontFace:RPT_FONT_BODY, fontSize:10.5, bold:true, color:RPT_COLOR.ink, valign:"middle" });
+      s.addText(rotationFromTo(r) || "Manually flagged", { x:c2x+0.25+cw*0.4, y:ry, w:cw-0.5-cw*0.4, h:0.36, align:"right", fontFace:RPT_FONT_BODY, fontSize:10, color:RPT_COLOR.teal, valign:"middle" });
+      ry += 0.44;
+    });
+    if(recentFirst.length>previewRows) s.addText(`+ ${recentFirst.length-previewRows} more — see the Rotation History page`, { x:c2x+0.25, y:ry+0.06, w:cw-0.5, h:0.3, fontFace:RPT_FONT_BODY, fontSize:9.5, italic:true, color:RPT_COLOR.mutedLight });
+    pbiFooter(s);
+
+    pbiTableSlides(pres, "Rotation History", "Rotated Members", null, [
+      { label:"Name", value:r=>r.name, w:2.3 },
+      { label:"Current position", value:r=>POSITIONS[r.positionKey].label, w:2.6 },
+      { label:"In role since", value:r=>rptDate(positionRefDate(r)), w:1.6, align:"center" },
+      { label:"Rotation", value:r=>rotationFromTo(r) || "Manually flagged — no history on file", w:2.13, align:"center" },
+      { label:"History", value:r=>(r.positionHistory && r.positionHistory.length) ? r.positionHistory.map(h=>`${(POSITIONS[h.positionKey]&&POSITIONS[h.positionKey].label)||h.positionKey} (${rptDate(h.effectiveDate)}–${rptDate(h.endDate)})`).join("  →  ") : "—", w:3.8 },
+    ], rotated);
   }
 
   function buildAndDownloadReport(scopes){
@@ -1361,6 +1511,7 @@
         return flag===dashFilters.flag;
       });
     }
+    if(dashFilters.personStatus!=="all") people = people.filter(p=>resolvedPersonStatus(p)===dashFilters.personStatus);
     people.sort((a,b)=>{
       const oa = POSITION_ORDER.indexOf(a.positionKey), ob = POSITION_ORDER.indexOf(b.positionKey);
       if(oa!==ob) return oa-ob;
@@ -1373,7 +1524,7 @@
   function renderFilterBar(){
     const total = Object.keys(STATE.people).length;
     const resignedCount = Object.values(STATE.people).filter(p=>!isActive(p)).length;
-    const nonDefault = dashFilters.position!=='all'||dashFilters.flag!=='all'||dashFilters.search||dashFilters.employment!=='active';
+    const nonDefault = dashFilters.position!=='all'||dashFilters.flag!=='all'||dashFilters.search||dashFilters.employment!=='active'||dashFilters.personStatus!=='all';
     return `<div class="filter-bar">
       <div class="filters">
         <input type="text" id="searchName" placeholder="Search name or employee ID… (Enter)" value="${esc(dashFilters.search)}">
@@ -1391,6 +1542,12 @@
           <option value="active" ${dashFilters.employment==='active'?'selected':''}>Active only</option>
           <option value="resigned" ${dashFilters.employment==='resigned'?'selected':''}>Left / resigned${resignedCount?` (${resignedCount})`:''}</option>
           <option value="all" ${dashFilters.employment==='all'?'selected':''}>Everyone</option>
+        </select>
+        <select id="filterPersonStatus" title="Newcomer/Rotation/Others — same classification used to scope the Export Report">
+          <option value="all" ${dashFilters.personStatus==='all'?'selected':''}>Any status</option>
+          <option value="newcomer" ${dashFilters.personStatus==='newcomer'?'selected':''}>Newcomer</option>
+          <option value="rotation" ${dashFilters.personStatus==='rotation'?'selected':''}>Rotation</option>
+          <option value="others" ${dashFilters.personStatus==='others'?'selected':''}>Others</option>
         </select>
         ${nonDefault ? `<button class="btn small" id="clearFilters">Clear filters</button>` : ''}
       </div>
@@ -1463,7 +1620,7 @@
     return `<div class="gantt-scroll"><table class="people">
       <thead><tr>
         <th class="chk-col"><input type="checkbox" id="selectAllVisible" ${allSelected?'checked':''}></th>
-        <th>Name</th><th>Employee ID</th><th>Position</th><th>Start date</th><th>Progress (Ph.1+2)</th><th>Flag</th><th></th></tr></thead>
+        <th>Name</th><th>Employee ID</th><th>Position</th><th>Start date</th><th>Status</th><th>Progress (Ph.1+2)</th><th>Flag</th><th></th></tr></thead>
       <tbody>${people.map(p=>{
         const pr = personProgress(p);
         const active = isActive(p);
@@ -1471,12 +1628,15 @@
           : pr.overdue>0 ? `<span class="flag-chip overdue">${pr.overdue} overdue</span>`
           : (pr.total>0 && pr.passed===pr.total ? `<span class="flag-chip ontrack">Complete</span>` : `<span class="flag-chip none">On track</span>`);
         const confirming = removeConfirmId===p.id;
+        const rStatus = resolvedPersonStatus(p);
+        const statusCell = `<span class="flag-chip status-${rStatus}">${esc(PERSON_STATUS_LABELS[rStatus])}</span>${p.statusOverride?' <span class="hint" style="font-size:11px">· manual</span>':''}${rStatus==='rotation'&&rotationFromTo(p)?`<div class="hint" style="font-size:11px">${esc(rotationFromTo(p))}</div>`:''}`;
         return `<tr${active?'':' class="row-resigned"'}>
           <td class="chk-col"><input type="checkbox" class="rowSelect" data-id="${p.id}" ${selectedPeopleIds.has(p.id)?'checked':''}></td>
           <td class="name" data-open="${p.id}">${esc(p.name)}</td>
           <td class="mono">${p.employeeId?esc(p.employeeId):'—'}</td>
           <td>${posPill(p.positionKey, POSITIONS[p.positionKey].label)}</td>
           <td class="mono">${p.startDate?esc(fmtDate(parseISO(p.startDate))):'—'}</td>
+          <td>${statusCell}</td>
           <td><div class="progress-cell"><div class="pbar"><i style="width:${pr.pct}%"></i></div><span class="pct">${pr.pct}%</span></div></td>
           <td>${flag}</td>
           <td><button class="btn small ${confirming?'danger-confirm':''}" data-remove="${p.id}">${confirming?'Click again':'Remove'}</button></td>
@@ -1837,6 +1997,16 @@
           <span class="hint">${person.positionHistory.map(h=>`${esc(POSITIONS[h.positionKey]?POSITIONS[h.positionKey].label:h.positionKey)} (${h.effectiveDate?esc(fmtDate(parseISO(h.effectiveDate))):'—'} – ${h.endDate?esc(fmtDate(parseISO(h.endDate))):'—'})${h.note?': '+esc(h.note):''}`).join(' &rarr; ')} &rarr; ${esc(POSITIONS[person.positionKey].label)} (since ${positionRefDate(person)?esc(fmtDate(parseISO(positionRefDate(person)))):'—'})</span>
         </div>` : ''}
         <div class="startdate-row" style="border-top:none">
+          <label for="statusOverrideInput">Status:</label>
+          <select id="statusOverrideInput">
+            <option value="" ${person.statusOverride?'':'selected'}>Auto-detect</option>
+            <option value="newcomer" ${person.statusOverride==='newcomer'?'selected':''}>Newcomer</option>
+            <option value="rotation" ${person.statusOverride==='rotation'?'selected':''}>Rotation</option>
+            <option value="others" ${person.statusOverride==='others'?'selected':''}>Others</option>
+          </select>
+          <span class="hint">${person.statusOverride ? `Manually set — ` : `Resolves to — `}<strong>${esc(PERSON_STATUS_LABELS[resolvedPersonStatus(person)])}</strong>${resolvedPersonStatus(person)==='rotation' ? (rotationFromTo(person) ? ` (${esc(rotationFromTo(person))})` : ` (manually flagged — no Position History on file)`) : ''}${person.statusOverride ? ` · used as-is in the Export Report` : ` · auto-detected from Position History / Probation %, used in the Export Report`}</span>
+        </div>
+        <div class="startdate-row" style="border-top:none">
           <label for="notesInput">Notes:</label>
           <input type="text" id="notesInput" value="${esc(person.notes||'')}" placeholder="e.g. rotated from Polyolefins, May 2023" style="flex:1;min-width:260px">
         </div>
@@ -2028,8 +2198,10 @@
       if(flagFilter) flagFilter.addEventListener("change", ()=>{ dashFilters.flag = flagFilter.value; paint(); });
       const employmentFilter = document.getElementById("filterEmployment");
       if(employmentFilter) employmentFilter.addEventListener("change", ()=>{ dashFilters.employment = employmentFilter.value; paint(); });
+      const personStatusFilter = document.getElementById("filterPersonStatus");
+      if(personStatusFilter) personStatusFilter.addEventListener("change", ()=>{ dashFilters.personStatus = personStatusFilter.value; paint(); });
       const clearFiltersBtn = document.getElementById("clearFilters");
-      if(clearFiltersBtn) clearFiltersBtn.addEventListener("click", ()=>{ dashFilters = {position:"all", flag:"all", search:"", employment:"active"}; paint(); });
+      if(clearFiltersBtn) clearFiltersBtn.addEventListener("click", ()=>{ dashFilters = {position:"all", flag:"all", search:"", employment:"active", personStatus:"all"}; paint(); });
 
       // Selection / compare
       root.querySelectorAll("input.rowSelect").forEach(chk=>{
@@ -2218,6 +2390,14 @@
       if(endDateInput){
         endDateInput.addEventListener("change", ()=>{
           STATE.people[selectedPersonId].endDate = endDateInput.value;
+          paint();
+          scheduleSave();
+        });
+      }
+      const statusOverrideInput = document.getElementById("statusOverrideInput");
+      if(statusOverrideInput){
+        statusOverrideInput.addEventListener("change", ()=>{
+          STATE.people[selectedPersonId].statusOverride = statusOverrideInput.value;
           paint();
           scheduleSave();
         });

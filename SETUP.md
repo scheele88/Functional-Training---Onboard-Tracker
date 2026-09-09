@@ -19,7 +19,8 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.1) version — see "Position changes / rotations" below for what's new.
+  (v3.4) version — see "Position changes / rotations", "Per-person Status", and "Export Report"
+  below for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -29,6 +30,8 @@ all. This version saves every change straight to a shared database, so:
 - **`migration_v3.1_position_history.sql`** — the schema addition for the position-history feature.
   **Also already applied and backfilled** for you — kept for the same reference/disaster-recovery
   reason as `migration.sql`.
+- **`migration_v3.3_status_override.sql`** — the schema addition for the new per-person Status
+  field (see "Per-person Status" below). **Also already applied** for you.
 
 ## Position changes / rotations (new)
 
@@ -46,28 +49,60 @@ section:
 - A **Position history** line appears on their page showing every past role and the dates they
   held it.
 
-## Export Report (new)
+## Per-person Status (new)
 
-There's now an **"Export report"** button in the top bar that builds a 16:9 PowerPoint (.pptx)
-straight from the live data in your browser — no server involved, nothing round-trips to Supabase
-beyond the data that's already loaded.
+Every active person now has a **Status**: Newcomer / Rotation / Others. You'll see it as a new
+column in the People table, and as a dropdown on each person's own page.
+
+By default it's **Auto-detect** — nothing to set for anyone already in the tracker:
+- **Rotation**, if they have a Position history entry (i.e. they've used Change Position at least
+  once) — shown with a from → to summary like "Oil → Gas", pulled straight from that history.
+- Otherwise **Newcomer**, if their Probation (Phase 1+2) completion is under 100%.
+- Otherwise **Others**.
+
+If you want a person's Status to read differently from what auto-detect would say — e.g. someone
+who rotated years ago and you'd rather the report call "Others" now, or a rotation that happened
+before this tracker existed and was never logged via Change Position — open their page and pick a
+value from the Status dropdown instead of "Auto-detect." That choice sticks (it's saved to the
+database like everything else) until you set it back to "Auto-detect." The People table shows a
+small "· manual" tag whenever a person's Status has been hand-set this way. There's also a Status
+filter in the People table's filter bar, next to Employment, so you can quickly see everyone in one
+category.
+
+This Status is what the Export Report's Newcomers/Rotated sections use to decide who's included —
+see below.
+
+## Export Report (updated — now a Power BI–style dashboard)
+
+The **"Export report"** button in the top bar builds a 16:9 PowerPoint (.pptx) straight from the
+live data in your browser — no server involved, nothing round-trips to Supabase beyond the data
+that's already loaded.
+
+The report now reads like a Power BI report rather than a slide deck: a light canvas, white
+bordered "visual" cards with a soft shadow and their own mini title, KPI cards, and each section
+consolidated onto **one dashboard page** — a KPI row across the top, two chart cards below — with
+the full detail table pushed to its own page(s) right after, the way a real Power BI report splits
+an Overview page from a Details page.
 
 Tick any combination of three sections (all three can go in one file):
 
-- **Overall results** — a section-wide KPI summary, a progress-by-position breakdown table, and
-  the full active roster with each person's probation completion %.
-- **Newcomers** — everyone active who hasn't yet finished their Phase 1+2 (probation-critical)
-  courses, i.e. anyone under 100% complete. This is self-maintaining: once someone finishes their
-  remaining courses they simply drop out of this section on the next export, no manual flag to
-  update.
-- **Rotated members** — everyone active with at least one entry in their Position history (see
-  above) — Oil → Gas, Gas → Oil, promotions, transfers in, or anything else recorded via Change
-  Position — with their full rotation history laid out.
+- **Overall results** — one dashboard page (active headcount, avg. probation %, on-track/overdue
+  KPIs; a **donut of Newcomer/Rotation/Others composition**; a **bar chart of average probation
+  completion by position**, color-coded green/amber/red), then a **Position Breakdown** detail page
+  and an **Active Roster** detail page with every active person's probation %.
+- **Newcomers** — everyone whose Status (see above) resolves to Newcomer. One dashboard page (KPI
+  row, an on-track-vs-overdue donut, and a "Newcomer Snapshot" mini progress-bar list of each
+  person's probation %), then a **Newcomer Roster** detail page.
+- **Rotated members** — everyone whose Status resolves to Rotation. One dashboard page (KPI row, a
+  bar chart of rotations by destination position, and a "Recent Rotations" preview list), then a
+  **Rotation History** detail page with a dedicated "Rotation" column (from → to) and the full
+  history.
 
-Only resigned people are excluded from every section, same as the rest of the dashboard. The file
-downloads as `Olefins-UT-Training-Report-<date>.pptx`, styled to match the section's navy/teal/amber
-look, and is safe to re-run as often as you like since it always reflects whatever's on screen right
-now.
+Because every section is driven by the same Status used in the People table, what you see there is
+exactly who shows up in the report — including any manual overrides you've set. Only resigned people
+are excluded from every section, same as the rest of the dashboard. The file downloads as
+`Olefins-UT-Training-Report-<date>.pptx` and is safe to re-run as often as you like since it always
+reflects whatever's on screen right now.
 
 ## Setting it up on GitHub Pages
 
