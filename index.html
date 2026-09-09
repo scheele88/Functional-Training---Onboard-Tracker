@@ -558,7 +558,18 @@
   let personMethodsUi = { search: "", statusFilter: "assigned", openEvalForm: null, openHistory: new Set(), importMsg: "" }; // v3.6/3.7 — per-person Test Methods panel state (incl. Excel-import result banner), reset when switching people
   let dashImportMsg = ""; // v3.7 — result banner for the dashboard-level (bulk, multi-person) Excel import
   let personTab = "schedule"; // v3.7 — "schedule" | "reeval", which tab a person's own page shows; reset when switching people
-  let progressScope = "probation";    // "probation" | "full" | "test" — v3.5, not persisted, drives every section-wide % (tiles, position grid, People table, Export Report)
+  // v3.5 — "probation" | "full" | "test" — drives every section-wide % (tiles, position grid, People
+  // table, Export Report). v3.12 — now persisted per-browser (localStorage), so it survives a page
+  // reload instead of silently resetting to "probation" every time; this was the most likely reason a
+  // Phase 3 course kept reading "no warning" even after switching to "Full progress" — the switch
+  // didn't stick past the next reload. Guarded against a browser that blocks storage (private window,
+  // strict settings) so it degrades to the old always-reset-to-probation behavior rather than erroring.
+  let progressScope = (function(){
+    try{
+      const saved = localStorage.getItem("progressScope");
+      return (saved==="probation"||saved==="full"||saved==="test") ? saved : "probation";
+    }catch(e){ return "probation"; }
+  })();
   let saveTimer = null;
   // Live, shared persistence via Supabase (see config.js for the project URL/anon key) — every
   // viewer's browser reads and writes the same real database, so unlike the old claude.ai Artifact
@@ -3380,6 +3391,7 @@
     progressScopeSelectEl.value = progressScope;
     progressScopeSelectEl.addEventListener("change", ()=>{
       progressScope = PROGRESS_SCOPE_VALUES.indexOf(progressScopeSelectEl.value)>=0 ? progressScopeSelectEl.value : "probation";
+      try{ localStorage.setItem("progressScope", progressScope); }catch(e){}
       paint();
     });
   }

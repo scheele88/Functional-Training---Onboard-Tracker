@@ -27,8 +27,8 @@ all. This version saves every change straight to a shared database, so:
   Flag/Methods columns are merged (v3.9)"**, **"Test-method relevance now also excludes
   Polyolefins-section methods entirely (v3.10)"**, **"Phase 3 (Continuing Plan) courses now
   compute overdue status correctly, and the admin panel guards against adding one with no due date
-  (v3.11)"**, and **"Removing a custom course now removes it everywhere it applies, not just the
-  open curriculum tab (v3.12)"** below for what's new.
+  (v3.11)"**, and **"Removing a custom course now removes it everywhere it applies, and the
+  Progress-basis choice now survives a reload (v3.12)"** below for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -402,28 +402,35 @@ as its own ~6-8 week slice within the 6-month window. Once you switch the dashbo
 (all phases)", it will show correctly for anyone whose position started long enough ago for that slice
 to have passed.
 
-## Removing a custom course now removes it everywhere it applies, not just the open curriculum tab (v3.12)
+## Removing a custom course now removes it everywhere it applies, and the Progress-basis choice now survives a reload (v3.12)
 
 You reported two follow-ups on `HS-K-4000-001`:
 
 1. Even switched to "Full progress (all phases)", the Flag column still wasn't warning overdue.
 2. Deleting the course in "Manage courses" only removed it from Luu Van Khue's (Section Manager) page —
-   it stayed on everyone else's.
+   it stayed on everyone else's, and after a few attempts to fix it, the course started showing up
+   *multiple times* on other people's own Planner/Schedule pages.
 
-**On (1):** I reproduced the exact data behind your account (read directly from the database) in an
-automated test and confirmed the v3.11 fix does compute "overdue" correctly for people who should be
-overdue on this course — e.g. Nguyen Dinh Vinh and Pham Van Tuan, both still "Not Started" with
-positions effective since 2023, both now correctly flag overdue under "Full progress (all phases)". I
-couldn't reproduce "no warning at all" against your real data, so if you're still seeing that, it's
-most likely one of: (a) the Progress-basis dropdown reset back to "Probation progress (Ph.1+2)" — it
-doesn't remember your choice across a page reload; or (b) your browser or Render is serving a cached
-copy of the old page — try a hard refresh (Ctrl+Shift+R / Cmd+Shift+R). If it's still not warning for a
-*specific* person after that, tell me who and I'll check that person's data directly.
+**On (1), the real cause turned out to be the Progress-basis dropdown resetting on every reload —
+fixed.** Your screenshot's own column header ("PROGRESS (PROBATION (PH.1+2))") confirmed the page was
+on the default scope, not "Full progress" — even though you'd switched it before. The dropdown never
+remembered your choice; it silently reset to "Probation (Ph.1+2)" every time the page reloaded, which
+is very easy to trigger without noticing (a refresh, reopening the tab, a Render redeploy). **It now
+remembers your choice in the browser** (saved locally, so it'll need to be set once per browser/device
+you use), so switching it once should stick from now on. To see this course's overdue warning on the
+People table: at the top of the dashboard, find the dropdown currently reading **"Probation progress
+(Ph.1+2)"** and change it to **"Full progress (all phases)"** — the column header will change to match,
+and the Flag column will then show the course as overdue for anyone who's past its due date. (Your
+second screenshot already showed this course correctly marked "OVERDUE" on the person's own
+Planner/Schedule tab — that calculation was already right; only the dashboard/People-table view needed
+the scope switched, and now needs it switched only once.)
 
 **On (2), the actual bug — fixed:** the "Remove" button on a custom course only ever deleted it from
 whichever curriculum tab was open when you clicked it (a pre-existing design from early on, meant for a
 narrower case). Since `HS-K-4000-001` was added to all 6 positions in one "Applies to" action, deleting
-it from the SM tab only cleared SM, leaving it live on SS/Eng/Gas/Oil/Utility — exactly what you saw.
+it from the SM tab only cleared SM, leaving it live on SS/Eng/Gas/Oil/Utility — and each retry to fix
+the missing SM assignment created another near-duplicate entry instead, which is why it started showing
+up 2-3 times on some people's own pages (your second screenshot).
 
 - **Remove now deletes the course from every curriculum it applies to, in one confirmed click** —
   matching the fact that it was added everywhere in one action.
@@ -431,15 +438,11 @@ it from the SM tab only cleared SM, leaving it live on SS/Eng/Gas/Oil/Utility �
   whenever a custom course applies to more than one curriculum, for the rarer case where you want to
   pare a course down to fewer curricula without deleting it everywhere.
 
-**Data cleanup needed:** while investigating (2) I found that repeated attempts to fix the missing "SM"
-assignment had left three separate database entries for `HS-K-4000-001` — the original (with the real
-"Passed" records already on it), plus two near-duplicates created afterward, none of which include SM
-either. I have **not** changed anything in the database — this needs your go-ahead since it touches
-live records for several people. I can run a one-time correction that: keeps the original entry (so
-nobody's already-recorded "Passed" status is disturbed), adds SM to it so it finally covers all 6
-positions as intended, and removes the two duplicate entries. Let me know and I'll run it, or you can
-now do the equivalent yourself with the fixed Remove button (delete the two duplicates, then re-add SM
-via a fresh "Add course" covering just SM) — though the database-side fix avoids re-typing anything.
+**Data cleanup — done.** The three accumulated database entries for `HS-K-4000-001` have been
+consolidated into one (I confirmed first, via a read-only check, that only the original entry carried
+real recorded "Passed" statuses — the other two were still "Not Started" everywhere, so nothing was
+lost). That one entry now correctly covers all 6 positions, including SM. You shouldn't see the
+duplicate rows on anyone's Planner/Schedule tab any more — a hard refresh will confirm it.
 
 ## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
@@ -604,8 +607,13 @@ correctly flags Nguyen Dinh Vinh and Pham Van Tuan as overdue on it under "Full 
 ruling out a remaining calculation bug; then, for the Remove fix, a custom course applied to three
 curricula (SM/SS/Gas) correctly disappears from all three after one confirmed click of "Remove" on any
 one of them, while a second course clicked through the new "Only remove from `<curriculum>`" action
-instead disappears from just that curriculum and stays live on the other two — the full pre-existing
-suite (v3.9, v3.10, v3.11 included) was re-run afterward and confirmed to still pass. However, this
+instead disappears from just that curriculum and stays live on the other two; after the user's
+follow-up screenshots showed the People-table Flag still not warning despite the person's own
+Planner/Schedule tab correctly showing "OVERDUE," the column header in the screenshot itself confirmed
+the page had reset to the default scope, which traced to the Progress-basis dropdown never persisting
+its value — fixed by saving it to `localStorage` on change and reading it back (guarded, so a browser
+that blocks storage just falls back to the old always-reset behavior) — the full pre-existing suite
+(v3.9, v3.10, v3.11 included) was re-run afterward and confirmed to still pass. However, this
 sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
