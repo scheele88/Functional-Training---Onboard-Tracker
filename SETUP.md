@@ -19,9 +19,10 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.7) version — see "Position changes / rotations", "Per-person Status", "Progress scope
-  (new)", "Export Report", **"Test Methods — Competency & Re-evaluation Tracking (v3.6)"**, and
-  **"Re-evaluation tab, editable dates & Excel import (new, v3.7)"** below for what's new.
+  (v3.7, with the September 2026 import bugfix) version — see "Position changes / rotations",
+  "Per-person Status", "Progress scope (new)", "Export Report", **"Test Methods — Competency &
+  Re-evaluation Tracking (v3.6)"**, and **"Re-evaluation tab, editable dates & Excel import (new,
+  v3.7)"** below for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -163,41 +164,65 @@ re-evaluation frequency. If a Next Due date had previously come from an Excel im
 rather than being computed, editing the Completed date by hand clears that and goes back to the
 computed date — a manual edit always wins going forward.
 
-**4. Import from Excel, in the Re-evaluation tab.** A new **"Import from Excel…"** button opens a
-file picker for `.xlsx`/`.xls` files in the same format as the competency-evaluation export you
-attached as a reference — the parser was built directly against that file, not a guess:
+**4. Import from Excel — one file, any number of people, from two entry points.** The parser reads
+the same competency-evaluation export format you use for real training-report downloads — verified
+directly against one of your actual exported files, not just a synthetic example:
 
-- It expects repeating blocks, one per person, each starting with a `Name:` cell (the value right
-  after it, or on the same cell as `Name: <name>`, is matched against that person's name in the
-  roster — case-insensitive, trimmed) followed by a course table with columns **No. / Course /
-  Description / Complete Date / Re-Training Date**. The small "Competency" summary table
-  (General/Functional rows) above each person's course table is recognized and skipped automatically
-  — it has no method-row data in it.
+- **Dashboard button:** a new **"Import test results (Excel)"** button sits in the main header
+  (next to "Manage test methods"). Use this whenever a file covers more than one person — which is
+  the normal case for a training-report export, since one file commonly bundles several people's
+  records. It isn't behind the admin password, the same as logging an evaluation from a person's own
+  page.
+- **Per-person button:** the **"Import from Excel…"** button inside a person's Re-evaluation tab
+  still works the same way — it's just not the only entry point anymore. Both buttons run the exact
+  same parser and update **every** person the file matches, not only the person whose page happens
+  to be open; use whichever is more convenient.
+- It expects repeating blocks, one per person, each starting with a `Name:` cell followed by a
+  course table with columns **No. / Course / Description / Complete Date / Re-Training Date**. The
+  small "Competency" summary table (General/Functional rows) above each person's course table is
+  recognized and skipped automatically — it has no method-row data in it. Name detection tolerates
+  the merged-cell layout real exports use — where "Name:" and its value sit in separate merged
+  ranges with a blank cell in between — by scanning forward past any blank cells rather than only
+  checking the very next one.
+- Name matching **ignores Vietnamese diacritics** on both sides (e.g. "Trần Thành Đạt" and
+  "Nguyễn Quốc Thịnh" match roster entries stored as plain-ASCII "Tran Thanh Dat" / "Nguyen Quoc
+  Thinh"), so it works whichever way a given export happens to spell a name.
 - **The join key is the Description column**, not Course — it holds the CL-T-XXXX-XXXX Document No.
-  that matches this tracker's test-method catalog directly (the Course column's `Lab-xx-xx-xxx` codes
-  are a different, internal numbering and aren't used for matching).
-- **Dates are read as DD/MM/YY(YY)** — day-first, based on your sample file (several rows have a day
-  value over 12, which rules out month-first). If a Complete Date is present, it updates that
-  person+method's Completed date; if a Re-Training Date is also present in the same row, it's stored
-  as that evaluation's explicit next-due date (overriding the frequency-based calculation) — this
-  matters because your sample file's Re-Training Date is consistently one day before what
-  `Complete Date + frequency` would compute (e.g. a Complete Date of 22/07/25 with a 1-year frequency
-  computes to 22/07/26, but the file says 21/07/26) — read as "valid through the day before the next
-  anniversary." Importing preserves that exact date rather than silently overriding it with the
-  computed one.
-- **One file can cover one person or many** — every `Name:` block found is processed, each against
-  its own rows, in one pass.
+  that matches this tracker's test-method catalog directly. Rows for non-test-method courses (e.g.
+  Description values starting HS-K-, CL-P-, CL-W-, IM-P-) are recognized as not matching that
+  pattern and silently skipped, same as the Course column's `Lab-xx-xx-xxx` codes — exactly what you
+  flagged as being mixed into the same export.
+- **Dates are read as DD/MM/YY(YY)** — day-first, confirmed against your real file's date-typed
+  cells. If a Complete Date is present, it updates that person+method's Completed date; if a
+  Re-Training Date is also present in the same row, it's stored as that evaluation's explicit
+  next-due date (overriding the frequency-based calculation) — this matters because your export's
+  Re-Training Date is consistently one day before what `Complete Date + frequency` would compute
+  (e.g. a Complete Date of 22/07/25 with a 1-year frequency computes to 22/07/26, but the file says
+  21/07/26) — read as "valid through the day before the next anniversary." Importing preserves that
+  exact date rather than silently overriding it with the computed one.
 - After importing, a summary banner shows how many test-method records were updated and for how many
   people, plus any names in the file that didn't match anyone in the roster and any Document No.s
-  that didn't match anything in the test-method catalog — so you can tell at a glance whether
-  something in the file needs a name spelled the same way as the roster, or a method added via
-  "Manage test methods" first.
+  that didn't match anything in the test-method catalog. A name landing in "not found" is expected
+  and not necessarily a problem — as you noted, a real export can include people who've since
+  resigned, rotated to another section, or been promoted out of the roster this tracker covers; it
+  can also mean a spelling mismatch worth checking against "Manage test methods"/the People table.
 - A row with a Document No. but no recognizable Complete Date, or that appears before any `Name:`
   cell has been seen, is skipped — nothing is guessed.
 
 This all runs entirely in your browser (via a small library, SheetJS, loaded the same way as the
 existing PowerPoint-export library) — the file never leaves your machine except to save the parsed
 results to the database, same as any other edit in the tracker.
+
+**A bug from the first version of this feature, found and fixed against your real export.** When
+you tried the very first version of Excel import against one of your actual training-report
+downloads, it reported 0 records updated and recognized no "Name:" rows at all. The cause: that
+version only checked the cell immediately after a "Name:" label for the name value, but a real
+export's "Name:" label and its value sit in separate merged cell ranges with a blank cell in
+between — so the immediately-next cell was always empty and no name was ever picked up, anywhere in
+the file. Fixed by scanning forward past blank cells (see above). Testing against your real file
+after the fix also surfaced the diacritics issue described above, fixed the same round. Both fixes
+were verified directly against the file you sent — it now correctly reports every person and every
+test-method record it contains.
 
 ## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
@@ -315,9 +340,15 @@ and clears a previously-imported override, and an Excel import against a synthet
 same layout as your sample screenshot correctly updates multiple people's records in one pass,
 carries the imported Re-Training Date through as an explicit override, computes Next Due normally
 when a row has no Re-Training Date, and reports unmatched names/Document No.s rather than silently
-dropping them) — everything passed, and I re-ran the full pre-v3.7 test suite afterward to confirm
-nothing already working (course schedules, position changes, Export Report, Progress scope, the
-v3.6 Test Methods panel itself) regressed. However, this sandbox's network access doesn't
+dropping them; and for the September 2026 import-bugfix round — re-tested against your actual
+uploaded export file rather than a synthetic one, confirming it now correctly recognizes every
+"Name:" block despite the merged-cell layout, matches diacritic and plain-ASCII spellings of the
+same name, correctly reports the people in the file who aren't in the roster, updates every matched
+person from a single import (checked for two different people from the same file, from both the
+dashboard and the per-person entry points), and triggers a save) — everything passed, and I re-ran
+the full pre-existing test suite afterward to confirm nothing already working (course schedules,
+position changes, Export Report, Progress scope, the v3.6 Test Methods panel, the earlier v3.7
+tab/date-edit behavior) regressed. However, this sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
 confirm the 24 people and their Passed/Not Started course statuses look right, add a test person
@@ -326,9 +357,9 @@ the new Change Position flow once on a test person before relying on it for a re
 v3.6, open "Manage test methods" and confirm all 179 methods and their frequencies look right, then
 open a test person's page, assign a method, log an evaluation, refresh the page and confirm it's
 still there. For v3.7, open an Analyst's page and confirm the header buttons are gone and the two
-tabs work, try editing a Completed date directly, and try the Excel import on one of your own real
-export files (start with a copy covering just one or two people) to confirm the name/Document No.
-matching behaves as expected against your actual data before relying on it for a bulk update.
+tabs work, try editing a Completed date directly, and try the dashboard's "Import test results
+(Excel)" button on one of your own real export files to confirm it updates everyone the file covers
+and the summary banner's counts look right before relying on it for routine use.
 
 ## Everyday use
 

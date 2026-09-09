@@ -422,6 +422,8 @@
       <button class="btn small dash-only-action" id="openExportReport">Export report</button>
       <button class="btn small dash-only-action" id="openAdmin">Manage courses</button>
       <button class="btn small dash-only-action" id="openMethodsAdmin">Manage test methods</button>
+      <button class="btn small dash-only-action" id="openDashMethodsImport" title="Bulk-update Complete Date / Re-Training Date for every matching analyst found in one Excel file">Import test results (Excel)</button>
+      <input type="file" id="dashMethodsImportFile" accept=".xlsx,.xls" style="display:none">
       <button class="btn small dash-only-action" id="openPwdSet" title="Set or change the admin password">🔒</button>
       <span class="save-chip dash-only-action" id="saveChip" data-state="idle">Connecting…</span>
     </div>
@@ -554,6 +556,7 @@
   let methodsAdminSearch = "";        // v3.6 — "Manage test methods" search box
   let methodsAdminAddOpen = false;
   let personMethodsUi = { search: "", statusFilter: "assigned", openEvalForm: null, openHistory: new Set(), importMsg: "" }; // v3.6/3.7 — per-person Test Methods panel state (incl. Excel-import result banner), reset when switching people
+  let dashImportMsg = ""; // v3.7 — result banner for the dashboard-level (bulk, multi-person) Excel import
   let personTab = "schedule"; // v3.7 — "schedule" | "reeval", which tab a person's own page shows; reset when switching people
   let progressScope = "probation";    // "probation" | "full" | "test" — v3.5, not persisted, drives every section-wide % (tiles, position grid, People table, Export Report)
   let saveTimer = null;
@@ -2040,6 +2043,7 @@
 
   function renderDashboard(){
     return `
+      ${dashImportMsg ? `<div class="hint" id="dashMethodsImportMsg" style="white-space:pre-line;padding:10px 14px;margin:0 0 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2, rgba(0,0,0,.03))">${esc(dashImportMsg)} <button class="btn small" id="dismissDashImportMsg" style="margin-left:8px">Dismiss</button></div>` : ''}
       ${renderDashboardTiles()}
       ${renderDrillPanel()}
       <section class="panel">
@@ -2385,9 +2389,9 @@
             <option value="due_first" ${ui.statusFilter==='due_first'?'selected':''}>Never evaluated</option>
             <option value="due_soon" ${ui.statusFilter==='due_soon'?'selected':''}>Due soon</option>
           </select>
-          <button class="btn small" id="openMethodsImport">Import from Excel…</button>
+          <button class="btn small" id="openMethodsImport" title="Applies to every matching person found in the file, not just this one — for a multi-person file, the dashboard's &quot;Import test results (Excel)&quot; button is the more direct entry point">Import from Excel…</button>
           <input type="file" id="methodsImportFile" accept=".xlsx,.xls" style="display:none">
-          <span class="hint">Tick to assign a method to this person; untick to remove it from their qualification list (history is kept). "Failed — retrain" overrides the date-based status until a new, passing evaluation is logged. Completed date can be edited directly in the table below.</span>
+          <span class="hint">Tick to assign a method to this person; untick to remove it from their qualification list (history is kept). "Failed — retrain" overrides the date-based status until a new, passing evaluation is logged. Completed date can be edited directly in the table below. Importing from Excel updates every person the file matches, not just this one — use the dashboard's "Import test results (Excel)" button if the file covers many people at once.</span>
         </div>
         ${ui.importMsg ? `<div class="hint" id="methodsImportMsg" style="white-space:pre-line;padding:8px 12px;margin:0 0 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2, rgba(0,0,0,.03))">${esc(ui.importMsg)}</div>` : ''}
         <div class="gantt-scroll"><table class="people admin-table">
@@ -2398,12 +2402,21 @@
   }
 
   // ---------- v3.7: Excel import for Re-evaluation data (Complete Date / Re-Training Date) ----------
-  // Format assumed from the user's sample export: repeating blocks per person of "Name: <name>" /
-  // "Position: <label>" header rows, a small Competency summary table (skipped — no CL-T doc-no cells
-  // in it), then a course table with columns No. | Course | Description | Complete Date |
-  // Re-Training Date, where "Description" holds the CL-T-XXXX-XXXX Document No. that matches
-  // onb_methods.id directly. Dates are DD/MM/YY[YY] (confirmed day-first: sample rows have day values
-  // > 12). A file can contain one or many people's blocks, across one or many sheets.
+  // Format confirmed against a real exported report (not just the original sample screenshot):
+  // repeating blocks per person of "Name: <name>" / "Position: <label>" header rows, a small
+  // Competency summary table (skipped — no CL-T doc-no cells in it), then a course table with columns
+  // No. | Course | Description | Complete Date | Re-Training Date, where "Description" holds the
+  // CL-T-XXXX-XXXX Document No. that matches onb_methods.id directly — every other Document-No.
+  // prefix (e.g. HS-K-..., CL-P-..., CL-W-..., IM-P-...) is a non-test-method course and is skipped
+  // the same way the Competency summary table is, since it simply never matches the CL-T pattern. In
+  // the real export, "Name:"/"Position:" and the column headers all sit in *merged* cells — the label
+  // and its value are not always adjacent columns (e.g. "Name:" in column A, the name itself in
+  // column C, with column B blank from the merge) — the row-scan below accounts for that. Dates are
+  // real Excel date cells formatted dd/mm/yy (confirmed day-first from the cell format itself, not
+  // guessed). A file can contain one or many people's blocks — even several repeated blocks for the
+  // *same* person — across one or many sheets; every block found is processed in one pass, and person
+  // names are matched with Vietnamese-diacritic-insensitive comparison (see normalizeNameForMatch)
+  // since a report export may spell a name with full diacritics even where the roster doesn't.
   function parseImportDateCell(v){
     if(v==null || v==="") return null;
     const s = String(v).trim();
@@ -2414,10 +2427,19 @@
     if(mm<1 || mm>12 || dd<1 || dd>31) return null;
     return toISO(new Date(yy, mm-1, dd));
   }
+  // Strips Vietnamese diacritics (and the đ/Đ stroke, which doesn't decompose via NFD like the
+  // accented vowels do) so "Trần Thành Đạt" and "Tran Thanh Dat" compare equal — a real export can
+  // use full diacritics for a name the roster stores in plain ASCII, or vice versa.
+  function normalizeNameForMatch(s){
+    return String(s||"")
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/đ/g, "d").replace(/Đ/g, "D")
+      .trim().toLowerCase().replace(/\s+/g, " ");
+  }
   function findPersonByName(name){
-    const q = String(name||"").trim().toLowerCase();
+    const q = normalizeNameForMatch(name);
     if(!q) return null;
-    return Object.values(STATE.people).find(p=> (p.name||"").trim().toLowerCase()===q) || null;
+    return Object.values(STATE.people).find(p=> normalizeNameForMatch(p.name)===q) || null;
   }
   function applyMethodsImportRow(person, methodId, completeISO, retrainISO){
     if(!person.methods) person.methods = {};
@@ -2444,13 +2466,22 @@
       let currentName = null;
       rows.forEach(row=>{
         const cells = (row||[]).map(c=>String(c==null?"":c).trim());
-        // Look for a "Name:" label, either as one combined cell or split across two cells — resets
-        // which person subsequent data rows (until the next "Name:") are attributed to.
+        // Look for a "Name:" label — either combined with the value in one cell, or the value in the
+        // very next cell, or (as seen in a real export, where "Name:"/the name sit in merged cells a
+        // few columns apart with blank cells from the merge in between) the first non-blank cell
+        // found within a few columns to the right. Resets which person subsequent data rows (until
+        // the next "Name:") are attributed to.
         for(let i=0;i<cells.length;i++){
           const c = cells[i];
+          if(!c) continue;
           const inlineMatch = c.match(/^name\s*:\s*(.+)$/i);
           if(inlineMatch && inlineMatch[1]){ currentName = inlineMatch[1].trim(); break; }
-          if(/^name\s*:?$/i.test(c) && cells[i+1]){ currentName = cells[i+1]; break; }
+          if(/^name\s*:?$/i.test(c)){
+            for(let j=i+1;j<cells.length && j<i+6;j++){
+              if(cells[j]){ currentName = cells[j]; break; }
+            }
+            if(currentName) break;
+          }
         }
         // A CL-T-XXXX-XXXX Document No. cell marks a data row for one test method; the small
         // Competency summary table (General/Functional) has no such cell and is skipped naturally.
@@ -2472,6 +2503,20 @@
     });
     return result;
   }
+  // Builds the human-readable result banner shared by both import entry points (a person's own
+  // Re-evaluation tab, and the dashboard-level bulk button) — the underlying parse/apply logic
+  // already covers every "Name:" block found in the file, i.e. every entry point already updates
+  // every matching person in the file, not just whichever person's page you happened to be on.
+  function buildMethodsImportSummary(result, filename){
+    const byPerson = {};
+    result.updated.forEach(u=>{ byPerson[u.person] = (byPerson[u.person]||0) + 1; });
+    const peopleCount = Object.keys(byPerson).length;
+    let msg = `Import from "${filename}": ${result.updated.length} test-method record(s) updated across ${peopleCount} ${peopleCount===1?'person':'people'}.`;
+    if(result.unmatchedPeople.size) msg += `\nName(s) in the file not found in the roster (resigned/rotated/promoted people, or a spelling mismatch, both read the same way — check against "Manage test methods"/the People table if unexpected): ${Array.from(result.unmatchedPeople).join(", ")}.`;
+    if(result.unmatchedMethods.size) msg += `\nDocument No.(s) not found in the test-method catalog: ${Array.from(result.unmatchedMethods).join(", ")}.`;
+    if(!result.updated.length && !result.unmatchedPeople.size && !result.unmatchedMethods.size) msg += `\nNo "Name:" + CL-T-xxxx-xxxx rows were recognized — check the file matches the expected export format.`;
+    return msg;
+  }
   function handleMethodsImportFile(file){
     const reader = new FileReader();
     reader.onload = (e)=>{
@@ -2479,18 +2524,34 @@
         const data = new Uint8Array(e.target.result);
         const wb = XLSX.read(data, { type:"array" });
         const result = parseMethodsImportWorkbook(wb);
-        const byPerson = {};
-        result.updated.forEach(u=>{ byPerson[u.person] = (byPerson[u.person]||0) + 1; });
-        const peopleCount = Object.keys(byPerson).length;
-        let msg = `Import from "${file.name}": ${result.updated.length} test-method record(s) updated across ${peopleCount} ${peopleCount===1?'person':'people'}.`;
-        if(result.unmatchedPeople.size) msg += `\nName(s) not found in the roster: ${Array.from(result.unmatchedPeople).join(", ")}.`;
-        if(result.unmatchedMethods.size) msg += `\nDocument No.(s) not found in the test-method catalog: ${Array.from(result.unmatchedMethods).join(", ")}.`;
-        if(!result.updated.length && !result.unmatchedPeople.size && !result.unmatchedMethods.size) msg += `\nNo "Name:" + CL-T-xxxx-xxxx rows were recognized — check the file matches the expected export format.`;
-        personMethodsUi.importMsg = msg;
+        personMethodsUi.importMsg = buildMethodsImportSummary(result, file.name);
         if(result.updated.length) scheduleSave();
         paint();
       } catch(err){
         personMethodsUi.importMsg = `Could not read "${file.name}": ${err && err.message ? err.message : err}`;
+        paint();
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+  // v3.7 — dashboard-level bulk import: same file format, but the entry point isn't tied to any one
+  // person's page, since one file usually covers many analysts at once. Always lands back on the
+  // dashboard afterward so the result banner is visible regardless of which view the button was
+  // clicked from (it's a dash-only-action, so it also shows on the admin/methods-admin views).
+  function handleDashMethodsImportFile(file){
+    const reader = new FileReader();
+    reader.onload = (e)=>{
+      try{
+        const data = new Uint8Array(e.target.result);
+        const wb = XLSX.read(data, { type:"array" });
+        const result = parseMethodsImportWorkbook(wb);
+        dashImportMsg = buildMethodsImportSummary(result, file.name);
+        view = "dashboard";
+        if(result.updated.length) scheduleSave();
+        paint();
+      } catch(err){
+        dashImportMsg = `Could not read "${file.name}": ${err && err.message ? err.message : err}`;
+        view = "dashboard";
         paint();
       }
     };
@@ -2584,6 +2645,8 @@
     root.querySelectorAll('.date-edit').forEach(wireDateEditEl);
 
     if(view==="dashboard"){
+      const dismissDashImportMsgBtn = document.getElementById("dismissDashImportMsg");
+      if(dismissDashImportMsgBtn) dismissDashImportMsgBtn.addEventListener("click", ()=>{ dashImportMsg=""; paint(); });
       const toggleBtn = document.getElementById("toggleAddForm");
       if(toggleBtn) toggleBtn.addEventListener("click", ()=>{ addFormOpen=!addFormOpen; paint(); });
       const cancelBtn = document.getElementById("cancelNewPerson");
@@ -3052,6 +3115,17 @@
   });
   const openPwdSetBtn = document.getElementById("openPwdSet");
   if(openPwdSetBtn) openPwdSetBtn.addEventListener("click", openPwdSetModal);
+  // v3.7 — dashboard-level bulk Excel import (static shell, wired once — see comment above). No
+  // admin-password gate: importing evaluation results is the same kind of action as logging an
+  // evaluation from a person's page, which also isn't gated.
+  const openDashMethodsImportBtn = document.getElementById("openDashMethodsImport");
+  const dashMethodsImportFileInput = document.getElementById("dashMethodsImportFile");
+  if(openDashMethodsImportBtn && dashMethodsImportFileInput) openDashMethodsImportBtn.addEventListener("click", ()=>{ dashMethodsImportFileInput.click(); });
+  if(dashMethodsImportFileInput) dashMethodsImportFileInput.addEventListener("change", ()=>{
+    const file = dashMethodsImportFileInput.files && dashMethodsImportFileInput.files[0];
+    if(file) handleDashMethodsImportFile(file);
+    dashMethodsImportFileInput.value = "";
+  });
 
   // Admin gate + password-set modal controls (static shell, wired once — see comment above).
   const admGatePwdInp = document.getElementById("admGatePwd");
