@@ -2585,6 +2585,16 @@
     // filter the list itself, for every position. This retires the manual assign/unassign checkbox
     // entirely: a method's presence here is now automatic, driven purely by curriculum membership, the
     // same way Courses already work.
+    // v3.18 — one round later, the user clarified v3.17 went too far: a method that's genuinely not part
+    // of this position's curriculum AND has never been touched should stay gone (the original clutter
+    // complaint), but a method the person actually completed before — e.g. before a rotation/promotion —
+    // should stay visible, just clearly marked "not required for current position" and with no
+    // re-evaluation reminder, rather than disappearing along with its history. `r.stale` (assigned +
+    // outside the current curriculum — the same flag `methodOutsideCurrentCurriculum` has computed since
+    // v3.9/v3.10) is exactly that distinction, so the display filter below now keeps a row when it's
+    // either in the curriculum OR already has a record (`r.assigned`), and the row/status rendering
+    // further down suppresses the Next-due/Status reminder for a stale row and shows a "not required"
+    // badge instead.
     const posMethodCodes = curriculumMethodCodes(person.positionKey);
 
     // ---- Courses (curriculum), minus any that ARE a catalog test method (see courseMethodId above) ----
@@ -2618,18 +2628,24 @@
     }).join("");
     const coursesHeaderRow = courseFilterApplies ? `<tr class="admin-divider" style="font-weight:700"><td colspan="${colCount}">Courses (this position's curriculum)</td></tr>` : "";
 
-    // ---- Test methods (CL-D-1000-0010 catalog), filtered to this position's own curriculum only (v3.17
-    // — see the comment above posMethodCodes). A method outside the curriculum can no longer be brought
-    // into view here at all, so `stale` (assigned-but-not-curriculum) never applies to anything left in
-    // this list — it stays possible only in historical data already in the database. ----
-    let methodRows = personMethodEntriesRaw(person, {includeUnassigned: true})
-      .filter(r=>posMethodCodes.has(r.id.toLowerCase()))
-      .filter(r=>{
+    // ---- Test methods (CL-D-1000-0010 catalog): shown when either (a) the method is part of this
+    // position's own curriculum, or (b) the person already has a record for it (assigned/history) even
+    // though it's outside their current curriculum — a "stale" row (see v3.18 comment above). Case (b)
+    // is how a method completed under a previous position/role stays visible after a rotation or
+    // promotion instead of vanishing; a catalog method that's neither in the curriculum nor ever
+    // recorded for this person still never appears at all. ----
+    let allMethodRows = personMethodEntriesRaw(person, {includeUnassigned: true})
+      .filter(r=>posMethodCodes.has(r.id.toLowerCase()) || r.assigned);
+    const staleMethodCount = allMethodRows.filter(r=>r.stale).length;
+    let methodRows = allMethodRows.filter(r=>{
         if(ui.statusFilter==="assigned") return r.assigned;
         if(ui.statusFilter==="unassigned") return !r.assigned;
         if(ui.statusFilter==="all") return true;
-        if(!analyst) return r.assigned; // non-Analyst status filter only ever offers assigned/all/unassigned
-        return r.assigned && r.status.status===ui.statusFilter;
+        if(ui.statusFilter==="stale") return r.stale;
+        if(!analyst) return r.assigned; // non-Analyst status filter only ever offers assigned/all/unassigned/stale
+        // A stale row never matches an overdue/retrain/due_first/due_soon filter — it doesn't drive a
+        // reminder of any kind, so it can't be "due" for anything.
+        return r.assigned && !r.stale && r.status.status===ui.statusFilter;
       });
     if(ui.search){
       const q = ui.search.toLowerCase();
@@ -2646,14 +2662,22 @@
       const histOpen = ui.openHistory.has(r.id);
       const hist = (r.history||[]).slice().sort((a,b)=>(b.date||"").localeCompare(a.date||""));
       const inactive = r.method.active===false;
+      // v3.18 — a stale row (assigned, but outside this position's current curriculum: completed under a
+      // previous position/role) stays visible with its history intact, but is clearly marked "not
+      // required for current position" and never shows a re-evaluation reminder (Next due/Status), per
+      // the user's explicit ask. curriculumOwnerLabelFor names which curriculum it DOES belong to, when
+      // it belongs to one of the other 5 Olefins positions; empty means it isn't part of any Olefins
+      // curriculum at all (e.g. a Polyolefins-section method).
+      const staleOwner = r.stale ? curriculumOwnerLabelFor(r.id) : "";
+      const staleTitle = r.stale ? (staleOwner ? `Not required for current position — belongs to ${staleOwner}'s curriculum. Kept visible because it's already on record for this person (e.g. from before a rotation/promotion); no re-evaluation reminder applies.` : `Not required for current position — not part of any Olefins-section curriculum. Kept visible because it's already on record for this person; no re-evaluation reminder applies.`) : "";
       return `${catRow}
-      <tr${inactive?' class="row-inactive"':''}>
-        <td class="mono" style="font-size:11px">${esc(r.id)}${inactive?' <span class="hint">(inactive)</span>':''}</td>
+      <tr${(inactive||r.stale)?' class="row-inactive"':''}>
+        <td class="mono" style="font-size:11px">${esc(r.id)}${inactive?' <span class="hint">(inactive)</span>':''}${r.stale?` <span class="hint" title="${esc(staleTitle)}">(not required for current position)</span>`:''}</td>
         <td>${esc(r.method.name||"")}</td>
         ${analyst?`<td>${freqLabel}</td>`:''}
         <td class="mono"><input type="date" class="admin-input" style="width:130px" data-method-lastdate="${esc(r.id)}" value="${st.lastDate?esc(st.lastDate):''}" title="Edit the completed / last-evaluated date directly"></td>
-        ${analyst?`<td class="mono">${st.nextDue?esc(fmtDate(parseISO(st.nextDue))):'—'}</td>
-        <td><span class="flag-chip ${METHOD_STATUS_CHIP_CLASS[st.status]}">${esc(METHOD_STATUS_LABEL[st.status])}</span></td>`:''}
+        ${analyst?`<td class="mono">${r.stale?'—':(st.nextDue?esc(fmtDate(parseISO(st.nextDue))):'—')}</td>
+        <td>${r.stale?`<span class="flag-chip none" title="${esc(staleTitle)}">Not required</span>`:`<span class="flag-chip ${METHOD_STATUS_CHIP_CLASS[st.status]}">${esc(METHOD_STATUS_LABEL[st.status])}</span>`}</td>`:''}
         <td style="white-space:nowrap">
           <button class="btn small" data-method-log="${esc(r.id)}">Log eval.</button>
           ${hist.length?`<button class="btn small" data-method-hist="${esc(r.id)}">${histOpen?'Hide':'History ('+hist.length+')'}</button>`:''}
@@ -2688,8 +2712,8 @@
     const totalCourses = items.filter(it=>!courseMethodId(it)).length;
     const completedCourses = items.filter(it=>!courseMethodId(it) && !!itemState(person,it.id).actualDate).length;
     const metaHtml = analyst
-      ? `${completedCourses} of ${totalCourses} curriculum courses completed &nbsp;·&nbsp; Per CL-D-1000-0010 Rev.08: ${posMethodCodes.size} test methods in this position's curriculum &nbsp;·&nbsp; ${sum.overdue} overdue &nbsp;·&nbsp; ${sum.retrain} failed–retrain &nbsp;·&nbsp; ${sum.due_first} never evaluated &nbsp;·&nbsp; ${sum.due_soon} due soon`
-      : (()=>{ const assignedCount = personMethodEntriesRaw(person, {}).filter(r=>posMethodCodes.has(r.id.toLowerCase())).length; return `${completedCourses} of ${totalCourses} curriculum courses completed &nbsp;·&nbsp; ${posMethodCodes.size} test method${posMethodCodes.size===1?'':'s'} in this position's curriculum, ${assignedCount} on record &nbsp;·&nbsp; re-evaluation tracking (CL-D-1000-0010) applies to the 3 Analyst positions (Gas/Oil/Utility) only, so nothing here counts toward the Flag column or dashboard`; })();
+      ? `${completedCourses} of ${totalCourses} curriculum courses completed &nbsp;·&nbsp; Per CL-D-1000-0010 Rev.08: ${posMethodCodes.size} test methods in this position's curriculum${staleMethodCount?` &nbsp;·&nbsp; ${staleMethodCount} not required for current position (kept on record, no reminder)`:''} &nbsp;·&nbsp; ${sum.overdue} overdue &nbsp;·&nbsp; ${sum.retrain} failed–retrain &nbsp;·&nbsp; ${sum.due_first} never evaluated &nbsp;·&nbsp; ${sum.due_soon} due soon`
+      : (()=>{ const assignedCount = personMethodEntriesRaw(person, {}).filter(r=>posMethodCodes.has(r.id.toLowerCase())).length; return `${completedCourses} of ${totalCourses} curriculum courses completed &nbsp;·&nbsp; ${posMethodCodes.size} test method${posMethodCodes.size===1?'':'s'} in this position's curriculum, ${assignedCount} on record${staleMethodCount?` &nbsp;·&nbsp; ${staleMethodCount} not required for current position (kept on record, no reminder)`:''} &nbsp;·&nbsp; re-evaluation tracking (CL-D-1000-0010) applies to the 3 Analyst positions (Gas/Oil/Utility) only, so nothing here counts toward the Flag column or dashboard`; })();
     const statusFilterHtml = analyst ? `
           <select id="personMethodStatusFilter">
             <option value="all" ${ui.statusFilter==='all'?'selected':''}>All courses &amp; ${posMethodCodes.size} methods</option>
@@ -2699,15 +2723,17 @@
             <option value="retrain" ${ui.statusFilter==='retrain'?'selected':''}>Failed — retrain (test methods only)</option>
             <option value="due_first" ${ui.statusFilter==='due_first'?'selected':''}>Never evaluated (test methods only)</option>
             <option value="due_soon" ${ui.statusFilter==='due_soon'?'selected':''}>Due soon (test methods only)</option>
+            <option value="stale" ${ui.statusFilter==='stale'?'selected':''}>Not required for current position (${staleMethodCount})</option>
           </select>` : `
           <select id="personMethodStatusFilter">
             <option value="all" ${ui.statusFilter==='all'?'selected':''}>All courses &amp; ${posMethodCodes.size} methods</option>
             <option value="assigned" ${ui.statusFilter==='assigned'?'selected':''}>Completed / recorded only</option>
             <option value="unassigned" ${ui.statusFilter==='unassigned'?'selected':''}>Not yet completed / recorded</option>
+            <option value="stale" ${ui.statusFilter==='stale'?'selected':''}>Not required for current position (${staleMethodCount})</option>
           </select>`;
     const toolbarHint = analyst
-      ? `Courses AND test methods both come from this position's own curriculum directly — nothing to tick, nothing to assign; a method not part of this position's functional training plan never appears here at all. "Failed — retrain" overrides the date-based status until a new, passing evaluation is logged. Any Completed date can be edited directly in the table — for a course whose row IS a catalog test method, editing it here also marks the course Passed on the Planner/Schedule tab, so the two never disagree. Importing from Excel updates every person the file matches (not just this one) and also marks matching curriculum courses Passed — use the dashboard's "Import test results (Excel)" button if the file covers many people at once.`
-      : `Courses AND test methods both come from this position's own curriculum directly — nothing to tick, nothing to assign; a method not part of this position's functional training plan never appears here at all. Any Completed date can be edited directly in the table, or a test method logged with a result/evaluator/notes via "Log eval." Importing from Excel updates every person the file matches (not just this one) and also marks matching curriculum courses Passed — use the dashboard's "Import test results (Excel)" button if the file covers many people at once. Nothing here drives a warning anywhere in the app, since re-evaluation tracking doesn't apply to this position.`;
+      ? `Courses AND test methods both come from this position's own curriculum directly — nothing to tick, nothing to assign; a method never touched by this person and outside their curriculum never appears here at all. A method they DO have a record for from a previous position/role stays visible, marked "not required for current position," with no re-evaluation reminder. "Failed — retrain" overrides the date-based status until a new, passing evaluation is logged. Any Completed date can be edited directly in the table — for a course whose row IS a catalog test method, editing it here also marks the course Passed on the Planner/Schedule tab, so the two never disagree. Importing from Excel updates every person the file matches (not just this one) and also marks matching curriculum courses Passed — use the dashboard's "Import test results (Excel)" button if the file covers many people at once.`
+      : `Courses AND test methods both come from this position's own curriculum directly — nothing to tick, nothing to assign; a method never touched by this person and outside their curriculum never appears here at all. A method they DO have a record for from a previous position/role stays visible, marked "not required for current position," with no reminder. Any Completed date can be edited directly in the table, or a test method logged with a result/evaluator/notes via "Log eval." Importing from Excel updates every person the file matches (not just this one) and also marks matching curriculum courses Passed — use the dashboard's "Import test results (Excel)" button if the file covers many people at once. Nothing here drives a warning anywhere in the app, since re-evaluation tracking doesn't apply to this position.`;
     return `
       <section class="panel">
         <div class="panel-head">
