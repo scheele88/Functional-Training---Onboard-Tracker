@@ -19,7 +19,7 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.17) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
+  (v3.18) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
   "Export Report", **"Test Methods — Competency & Re-evaluation Tracking (v3.6)"**, **"Re-evaluation
   tab, editable dates & Excel import (new, v3.7)"**, **"Test methods now scope to your current
   position, and Excel import now updates the Planner/Schedule tab too (v3.8)"**, **"Test-method
@@ -33,8 +33,10 @@ all. This version saves every change straight to a shared database, so:
   **"Non-Analyst positions now get a Test Methods completion-record tab too (v3.14)"**,
   **"All courses now get a completion-record tab too, for every position including Analysts
   (v3.15)"**, **"Courses and Test Methods are now one merged table, and a genuine duplication
-  is now eliminated (v3.16)"**, and **"Test Methods now show only what's actually in a position's
-  own curriculum, and the tick/assign checkbox is gone (v3.17)"** below for what's new.
+  is now eliminated (v3.16)"**, **"Test Methods now show only what's actually in a position's
+  own curriculum, and the tick/assign checkbox is gone (v3.17)"**, and **"Methods you've already
+  completed under a previous position now stay visible, just marked inactive (v3.18)"** below for
+  what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -607,6 +609,10 @@ linked to the Planner/Schedule Status dropdown, same as before.
 
 ## Test Methods now show only what's actually in a position's own curriculum, and the tick/assign checkbox is gone (v3.17)
 
+**Note: point 2 below was loosened one round later — see "Methods you've already completed under a
+previous position now stay visible, just marked inactive (v3.18)" further down.** This section is kept
+as-written for history.
+
 After seeing v3.16 live, you sent a screenshot of a Shift Supervisor's page with a red box around
 CL-T-6000-0027 through CL-T-6000-0031 — Polyolefins-section methods (Seal Strength, Spiral flow, and
 similar), all inactive, all sitting unticked in the Test Methods section — and wrote: *"Why these
@@ -648,6 +654,51 @@ Shift Supervisor, not "179."
 fix — assigned, with history, the way CL-T-6000-0027 was on the Shift Supervisor in your screenshot —
 that record is untouched in the database; it simply doesn't render anywhere anymore. If a genuine
 process reason ever comes up to look at that old record again, it's still there.
+
+## Methods you've already completed under a previous position now stay visible, just marked inactive (v3.18)
+
+You came back after v3.17 with: *"Ok, that's better, but you deleted/removed way too much, or I forgot
+telling you. For courses/test methods that do not belong to current position but if they were complete
+previously (like before rotating or promoting or something else), please still keep them in the tab
+with the sign/signal/mark that they're not active anymore (just like you did previously I guess), and
+no remind for the evaluation for them (as said before)."*
+
+Fair correction — v3.17 hid every method outside a position's current curriculum, full stop, which
+also hid the legitimate case: a method you actually completed before a rotation or promotion, still a
+real record worth keeping visible for reference, just not something anyone needs reminding about
+anymore.
+
+**v3.18 draws the line where you asked: a method now shows on the tab whenever either (a) it's part of
+the position's own curriculum, or (b) this person already has a real record for it — assigned, with
+history — even if it's from a different position's curriculum entirely.** A catalog method that's
+*neither* in the curriculum *nor* ever recorded for this person still never appears — that part of
+v3.17 (the original clutter complaint) is unchanged.
+
+**1. A method with real history is marked, not hidden.** Its Code/Doc No. cell now carries a small
+"(not required for current position)" tag (hover it for detail — it'll name which position's curriculum
+it actually belongs to, or say it isn't part of any Olefins curriculum at all, e.g. a Polyolefins
+method). The row itself renders slightly dimmed, the same visual treatment an inactive catalog method
+already gets.
+
+**2. No reminder, anywhere, for these.** The Next Due and Status columns read "—" and "Not required"
+instead of a real due date or an Overdue/Due-soon chip — even if the underlying evaluation date is
+genuinely years old. It also can't be pulled into view under the Overdue/Failed–retrain/Never
+evaluated/Due soon filters, and it never counts toward the panel's own overdue/retrain figures, the
+People-table Flag column, or the dashboard's "Test methods needing attention" tile — all of that was
+already true before v3.18 (since v3.9/v3.10), this round only restores the *visibility* half.
+
+**3. A dedicated filter finds them.** "Not required for current position (N)" is back in the status
+filter dropdown, for every position — pick it to see exactly the methods that fall into this "kept for
+the record, not required anymore" bucket, without paging through everything else.
+
+**4. The meta line notes the count** — e.g. "…3 not required for current position (kept on record, no
+reminder)" — only when there's at least one, so a person with a clean curriculum-only list sees no
+change at all.
+
+This applies to Courses too, in principle, but courses don't currently have a comparable "outside the
+curriculum" concept the way test methods do (a course row only ever shows if it's in the position's own
+curriculum list to begin with) — so this round's change is scoped to Test Methods, which is where the
+gap actually was.
 
 ## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
@@ -868,7 +919,23 @@ unmodified underneath, with zero database writes triggered by simply viewing the
 is a display filter, not a data deletion. The full pre-existing suite (v3.9–v3.16 included, with the
 shared Excel-import fixture regenerated using real curriculum-matched Document Nos. for the mocked Gas
 and Oil people it exercises, since the old fixture had been using Document Nos. that happened not to
-belong to either mocked person's actual curriculum) was re-run afterward and confirmed to still pass.
+belong to either mocked person's actual curriculum) was re-run afterward and confirmed to still pass;
+and new for v3.18 — a mocked Gas analyst with real, dated evaluation history on both an Oil-curriculum
+method and a Polyolefins method with no Olefins-curriculum ties at all (the exact "before rotating"
+case you described) now correctly shows both, each carrying the "(not required for current position)"
+tag on its Code cell, with Next Due reading "—" and Status reading "Not required" instead of a real
+overdue chip despite genuinely old evaluation dates underneath; neither shows up under the Overdue
+filter; the dedicated "Not required for current position" filter correctly isolates exactly these rows
+and nothing else; a genuinely curriculum-matched, never-evaluated method still appears normally,
+unaffected; a catalog method this same person has never touched and that isn't in their curriculum
+still correctly stays hidden entirely, confirming v3.17's original clutter fix is untouched; and a
+control person with no stray records at all shows no "not required" badge or count anywhere on their
+page. The three pre-existing test files whose fixtures happened to include a real, dated evaluation on
+a curriculum-irrelevant method (`_pw_v39_curriculum.js`, `_pw_v310_polyolefins_methods.js`,
+`_pw_v314_nonanalyst_completion_record.js`) had their assertions updated from "correctly hidden" to
+"correctly shown, marked not required" — not because anything regressed, but because those fixtures
+exercise exactly the display behavior this round intentionally restored; the rest of the full
+pre-existing suite was re-run unchanged and confirmed to still pass. `node --check` clean throughout.
 However, this sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
@@ -910,7 +977,13 @@ your screenshot (or any Supervisor/Engineer/Section Manager) and confirm the Pol
 rows are gone entirely — not unticked, just absent — under every filter including "All"; confirm there's
 no checkbox anywhere in the table for any position; and spot-check a couple of other positions
 (Gas/Oil/Utility Analysts, Lead/Senior Engineer) to confirm each one's Test Methods list now looks like
-a real, position-specific curriculum rather than the full catalog.
+a real, position-specific curriculum rather than the full catalog. For v3.18, check anyone who's
+actually rotated or been promoted (Ninh Minh Hai, Nguyen Dinh Vinh, Van Minh Tien are the real
+long-tenured examples) and confirm a method they completed under their earlier position is back —
+marked "(not required for current position)," no due date, no status chip, not selectable under
+Overdue/Due soon — and that the new "Not required for current position" option in the status-filter
+dropdown isolates exactly those rows; then check a newer hire with no rotation history to confirm they
+see no such tag or count anywhere.
 
 ## Everyday use
 
