@@ -556,6 +556,7 @@
   let methodsAdminSearch = "";        // v3.6 — "Manage test methods" search box
   let methodsAdminAddOpen = false;
   let personMethodsUi = { search: "", statusFilter: "assigned", openEvalForm: null, openHistory: new Set(), importMsg: "" }; // v3.6/3.7 — per-person Test Methods panel state (incl. Excel-import result banner), reset when switching people
+  let personCoursesUi = { search: "", statusFilter: "all" }; // v3.15 — per-person Courses completion-record panel state (second tab), reset when switching people
   let dashImportMsg = ""; // v3.7 — result banner for the dashboard-level (bulk, multi-person) Excel import
   let personTab = "schedule"; // v3.7 — "schedule" | "reeval", which tab a person's own page shows; reset when switching people
   // v3.5 — "probation" | "full" | "test" — drives every section-wide % (tiles, position grid, People
@@ -2512,8 +2513,83 @@
         ${tabsHtml}
         ${scheduleHtml}
       </section>
-      ${activeTab==="reeval" ? renderPersonMethodsSection(person) : ''}
+      ${activeTab==="reeval" ? renderPersonCoursesSection(person, items) + renderPersonMethodsSection(person) : ''}
     `;
+  }
+
+  // ---------- v3.15: per-person Courses completion-record panel ----------
+  // Per the user, one round after v3.14 added a Test Methods completion tab for non-Analysts: "now I
+  // want all courses appear there now, for all positions (including analysts), the purpose is also to
+  // track the complete date." Two design points confirmed with the user before building (both the
+  // recommended option): this renders as its OWN separate table on the same second tab, above the
+  // existing Test Methods table, for every position including Analysts — not merged into one table, and
+  // not Analyst-gated; and its Completed-date field is deliberately kept as the SAME field the
+  // Planner/Schedule tab's Status dropdown already drives (ist.actualDate) rather than a second,
+  // independent record — entering a date here sets Status to Passed (matching what the Status dropdown
+  // already does when switched to Passed), and clearing it reverts to Not Started, so this tab and
+  // Planner/Schedule can never disagree about whether a course is done. This is the same `items` list
+  // (from courseData) the Planner/Schedule tab already renders — same phase grouping, same Code/Course
+  // columns — just with Target date swapped for an editable Completed date and no week-cell Gantt bar.
+  function renderPersonCoursesRow(item, ist){
+    const typeCls = item.type.indexOf("Test")===0 ? "type-test" : "type-doc";
+    return `<tr data-id="${item.id}">
+      <td class="code" title="${esc(item.code)}">${esc(item.code)}</td>
+      <td class="course">
+        <div class="name" title="${esc(item.topic)}">${esc(truncate(item.topic,58))}</div>
+        <span class="phase-chip ${item.phaseKey}">${phaseLabel(item.phaseKey)}</span>
+        <span class="type-badge ${typeCls}">${item.type.indexOf("Test")===0?'Test · '+esc(item.hours)+'h':'Doc · '+esc(item.hours)+'h'}</span>
+      </td>
+      <td class="status"><span class="hint">${esc(ist.status)}</span></td>
+      <td class="mono"><input type="date" class="admin-input" style="width:130px" data-course-lastdate="${esc(item.id)}" value="${ist.actualDate?esc(ist.actualDate):''}" title="Edit the completed date directly — sets Status to Passed; clearing it reverts to Not Started"></td>
+    </tr>`;
+  }
+  function renderPersonCoursesSection(person, items){
+    const ui = personCoursesUi;
+    const p1p2 = items.filter(it=>it.phaseKey==="p1"||it.phaseKey==="p2").slice().sort((a,b)=> a.week-b.week || a.no-b.no);
+    const p3 = items.filter(it=>it.phaseKey==="p4").slice().sort((a,b)=>a.no-b.no);
+    let rows = p1p2.concat(p3);
+    rows = rows.filter(item=>{
+      const ist = itemState(person, item.id);
+      if(ui.statusFilter==="completed") return !!ist.actualDate;
+      if(ui.statusFilter==="notcompleted") return !ist.actualDate;
+      return true;
+    });
+    if(ui.search){
+      const q = ui.search.toLowerCase();
+      rows = rows.filter(item=> (item.code||"").toLowerCase().indexOf(q)>=0 || (item.topic||"").toLowerCase().indexOf(q)>=0);
+    }
+    let lastPhase = null;
+    const bodyRows = rows.map(item=>{
+      const ist = itemState(person, item.id);
+      let phaseRow = "";
+      if(item.phaseKey!==lastPhase){
+        lastPhase = item.phaseKey;
+        const label = item.phaseKey==="p1" ? "Phase 1 — Orientation Essentials" : item.phaseKey==="p2" ? "Phase 2 — Critical Qualification (Probation)" : "Phase 3 — Continuing Plan";
+        phaseRow = `<tr class="phase-divider phase-${item.phaseKey}"><td colspan="4">${label}</td></tr>`;
+      }
+      return phaseRow + renderPersonCoursesRow(item, ist);
+    }).join("");
+    const completedCount = items.filter(item=>!!itemState(person,item.id).actualDate).length;
+    return `
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Courses — Completion Record</h2>
+          <div class="meta">${completedCount} of ${items.length} courses in this position's full curriculum have a completed date on record &nbsp;·&nbsp; entering a date here also sets that course's Status to Passed on the Planner/Schedule tab — the two views share the exact same record.</div>
+        </div>
+        <div class="people-toolbar">
+          <input type="text" id="personCourseSearch" placeholder="Search code or course name" value="${esc(ui.search)}" style="width:220px">
+          <select id="personCourseStatusFilter">
+            <option value="all" ${ui.statusFilter==='all'?'selected':''}>All ${items.length} courses</option>
+            <option value="completed" ${ui.statusFilter==='completed'?'selected':''}>Completed only</option>
+            <option value="notcompleted" ${ui.statusFilter==='notcompleted'?'selected':''}>Not yet completed</option>
+          </select>
+          <span class="hint">Enter a Completed date to mark a course Passed as of that date; clear it to revert the course to Not Started.</span>
+        </div>
+        <div class="gantt-scroll"><table class="people admin-table">
+          <thead><tr><th class="code">Code</th><th class="course">Course</th><th style="width:120px">Status</th><th style="width:150px">Completed date</th></tr></thead>
+          <tbody>${bodyRows || `<tr><td colspan="4" class="empty-state">No courses match this filter.</td></tr>`}</tbody>
+        </table></div>
+      </section>`;
   }
 
   // ---------- v3.6: per-person Test Methods panel ----------
@@ -3000,6 +3076,7 @@
           selectedPersonId = td.getAttribute("data-open"); view="person";
           personTab = "schedule";
           personMethodsUi = { search: "", statusFilter: "assigned", openEvalForm: null, openHistory: new Set(), importMsg: "" };
+          personCoursesUi = { search: "", statusFilter: "all" };
           paint();
         });
       });
@@ -3403,6 +3480,37 @@
           ist.trainerRole = sel.value;
           paint();
           scheduleSave();
+        });
+      });
+
+      // v3.15 — Courses completion-record panel (second tab, every position including Analysts)
+      const courseSearchEl = document.getElementById("personCourseSearch");
+      if(courseSearchEl) courseSearchEl.addEventListener("input", ()=>{
+        personCoursesUi.search = courseSearchEl.value;
+        paint();
+        const el2 = document.getElementById("personCourseSearch");
+        if(el2){ el2.focus(); el2.setSelectionRange(el2.value.length, el2.value.length); }
+      });
+      const courseStatusFilterEl = document.getElementById("personCourseStatusFilter");
+      if(courseStatusFilterEl) courseStatusFilterEl.addEventListener("change", ()=>{ personCoursesUi.statusFilter = courseStatusFilterEl.value; paint(); });
+      // Completed date, edited directly — deliberately drives the SAME ist.status/ist.actualDate pair the
+      // Planner/Schedule tab's Status dropdown already governs (see that handler above): entering a date
+      // marks the course Passed as of that date; clearing it reverts to Not Started. Per the user's
+      // confirmed choice, these two views of the same course are never allowed to disagree.
+      root.querySelectorAll("[data-course-lastdate]").forEach(inp=>{
+        inp.addEventListener("change", ()=>{
+          const person = STATE.people[selectedPersonId]; if(!person) return;
+          const id = inp.getAttribute("data-course-lastdate");
+          const ist = itemState(person, id);
+          if(inp.value){
+            ist.status = "Passed";
+            ist.actualDate = inp.value;
+          } else {
+            ist.status = "Not Started";
+            ist.actualDate = "";
+          }
+          scheduleSave();
+          paint();
         });
       });
 

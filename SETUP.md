@@ -19,7 +19,7 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.14) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
+  (v3.15) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
   "Export Report", **"Test Methods — Competency & Re-evaluation Tracking (v3.6)"**, **"Re-evaluation
   tab, editable dates & Excel import (new, v3.7)"**, **"Test methods now scope to your current
   position, and Excel import now updates the Planner/Schedule tab too (v3.8)"**, **"Test-method
@@ -30,8 +30,9 @@ all. This version saves every change straight to a shared database, so:
   (v3.11)"**, **"Removing a custom course now removes it everywhere it applies, and the
   Progress-basis choice now survives a reload (v3.12)"**, **"Course/document codes are now
   enforced unique, and test-method re-evaluation warnings are now truly Analyst-only (v3.13)"**,
-  and **"Non-Analyst positions now get a Test Methods completion-record tab too (v3.14)"** below
-  for what's new.
+  **"Non-Analyst positions now get a Test Methods completion-record tab too (v3.14)"**, and
+  **"All courses now get a completion-record tab too, for every position including Analysts
+  (v3.15)"** below for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -534,6 +535,36 @@ warnings.
   an import file that includes Section Manager/Supervisor/Lead/Senior Engineer completion records, this
   will now capture them.
 
+## All courses now get a completion-record tab too, for every position including Analysts (v3.15)
+
+One round after v3.14, you asked to go further: *"Only test methods are listed on such a new tab, now
+I want all courses appear there now, for all positions (including analysts), the purpose is also to
+track the complete date."*
+
+**That same second tab now shows a brand-new "Courses — Completion Record" table, above the Test
+Methods table, for every position — including the 3 Analysts, who didn't get anything new from v3.14.**
+It lists every course in that person's curriculum (the same ~90-180 courses you'd see on their
+Planner/Schedule tab, grouped by phase the same way), with just four columns: Code, Course, Status, and
+an editable **Completed date**.
+
+Two things worth knowing about how it works, both confirmed with you before building:
+
+**1. It's its own table, not merged into Test Methods.** Courses and test methods stay as two separate
+lists on the tab — Courses first, Test Methods below it — rather than one combined table, so each stays
+easy to scan on its own.
+
+**2. The Completed date here is the exact same record as the Status dropdown on Planner/Schedule — not
+a second, separate field.** Enter a date and the course is marked Passed as of that date (matching what
+already happens when you switch the Status dropdown to Passed); clear the date and it reverts to Not
+Started. Edit it from either tab and the other one shows the same result immediately — there's no way
+for these two views to disagree about whether a course is done. This also means it's a genuine
+improvement over the old flow: previously, marking a course Passed via the Status dropdown always
+stamped *today's* date automatically, with no way to enter a real, possibly earlier completion date
+directly — this tab is the first place you can do that.
+
+A search box and a "Completed only / All / Not yet completed" filter (default: All) help narrow a long
+list down, the same pattern as the Test Methods table next to it.
+
 ## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
 This is the same page as everything above — I originally built this as a separate app and separate
@@ -724,8 +755,16 @@ their Last completed date saves correctly, an Excel import correctly writes a co
 them (reverting the v3.13 skip), and — the part most at risk of a silent regression — their Flag column
 and the dashboard's "needing attention" tile both stay completely unaffected even after that import,
 while a control check confirms the Analyst (Gas) tab, its columns, and its panel title are all
-unchanged. The full pre-existing suite (v3.9–v3.13 included) was re-run afterward and confirmed to still
-pass. However, this sandbox's network access doesn't
+unchanged; and new for v3.15 — a mocked Section Manager's second tab now shows a "Courses — Completion
+Record" table listing their whole curriculum, editing a course's Completed date there correctly marks it
+Passed and that exact change is reflected on the Planner/Schedule tab's Status dropdown for the same
+course (and saved with the exact date entered, not today's date), clearing the date correctly reverts it
+to Not Started, and a mocked Gas analyst confirms the same new Courses table appears for Analysts too
+without touching their existing Re-evaluation panel. Several pre-existing tests needed small selector
+updates (not behavior changes) since the reeval tab now legitimately contains two panels instead of
+one — every check that used to grab "the" panel title or "the" table now targets the correct one of the
+two by position. The full pre-existing suite (v3.9–v3.14 included) was re-run afterward and confirmed to
+still pass. However, this sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
 confirm the 24 people and their Passed/Not Started course statuses look right, add a test person
@@ -758,6 +797,10 @@ now blocked from saving. For v3.14, open a Section Manager/Supervisor/Lead/Senio
 and confirm the second tab is labeled "Test Methods" (not "Re-evaluation") and opens a plain completion
 record with no Status column; try recording one manually and via a real Excel import file that covers
 one of these positions, and confirm their Flag column and the dashboard tile stay unaffected either way.
+For v3.15, open anyone's second tab (any position) and confirm the new "Courses — Completion Record"
+table appears above the existing methods table, enter a Completed date on a course there and switch to
+Planner/Schedule to confirm the same course now shows Passed with that same date, then clear the date
+and confirm it reverts to Not Started on both tabs.
 
 ## Everyday use
 
