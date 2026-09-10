@@ -19,7 +19,7 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.13) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
+  (v3.14) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
   "Export Report", **"Test Methods — Competency & Re-evaluation Tracking (v3.6)"**, **"Re-evaluation
   tab, editable dates & Excel import (new, v3.7)"**, **"Test methods now scope to your current
   position, and Excel import now updates the Planner/Schedule tab too (v3.8)"**, **"Test-method
@@ -28,9 +28,10 @@ all. This version saves every change straight to a shared database, so:
   Polyolefins-section methods entirely (v3.10)"**, **"Phase 3 (Continuing Plan) courses now
   compute overdue status correctly, and the admin panel guards against adding one with no due date
   (v3.11)"**, **"Removing a custom course now removes it everywhere it applies, and the
-  Progress-basis choice now survives a reload (v3.12)"**, and **"Course/document codes are now
-  enforced unique, and test-method re-evaluation warnings are now truly Analyst-only (v3.13)"**
-  below for what's new.
+  Progress-basis choice now survives a reload (v3.12)"**, **"Course/document codes are now
+  enforced unique, and test-method re-evaluation warnings are now truly Analyst-only (v3.13)"**,
+  and **"Non-Analyst positions now get a Test Methods completion-record tab too (v3.14)"** below
+  for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -493,6 +494,46 @@ an unfinished course is flagged Overdue) — nothing else about the schedule cha
 falls in, its status, and the Gantt bar it's shown on are unaffected. The hint text on each person's page
 ("target date = that date + Week × 7 days (end of that week)") reflects this directly.
 
+## Non-Analyst positions now get a Test Methods completion-record tab too (v3.14)
+
+You asked for this directly, with two screenshots: *"only analysts have the tab Re-evaluation. Now I
+want other positions have also, the purpose is not for tracking the re-evaluation date... I just wanted
+to track that when is the last time/when the time they complete the course. Similarly to analysts',
+this can be edited either manually or by importing data from such excel files."*
+
+**Every position now has a second tab on their own page**, not just Gas/Oil/Utility Analysts. What's on
+that tab depends on the position:
+
+- **Analysts (Gas/Oil/Utility)** — unchanged: the tab is still labeled **"Re-evaluation"**, and shows
+  the full re-evaluation panel per CL-D-1000-0010 (Freq., Next due, Status, Overdue/Due soon/etc.).
+- **Everyone else (QC Section Manager, QC Supervisor, QC Lead Engineer, QC Senior Engineer)** — the tab
+  is now labeled **"Test Methods"**, and opens a plainer panel titled **"Test Methods — Completion
+  Record."** It's the same 179-method catalog, but with the re-evaluation-cadence columns removed —
+  just Doc No., Test Method Name, an editable **Last completed** date, and Result. There's no Freq.,
+  Next due, or Status column, because none of that applies to these positions.
+
+**This is explicitly a record, not a requirement.** As you asked me to keep in mind: these positions
+don't need re-evaluation, so nothing logged here ever creates a warning. The panel's own meta line says
+so directly ("a completion log only... nothing here counts toward the Flag column or dashboard"), and I
+re-confirmed with a dedicated test that recording a method for a non-Analyst — even backdating it so it
+would look "overdue" if the re-evaluation rule applied — still leaves their Flag column clean and the
+dashboard's "Test methods needing attention" tile unaffected. The Analyst-only gating from v3.13 is
+untouched; this feature only changes what shows up on non-Analyst pages, not what counts toward anyone's
+warnings.
+
+**Editing works the same way as the Analyst tab:**
+
+- **Manually** — tick a method to record it (or use "All 179 methods" / "Not yet recorded" in the
+  filter to find it), then type or edit the Last completed date directly, the same inline-edit pattern
+  as the Analyst Re-evaluation tab.
+- **By Excel import** — the same "Import from Excel" button and file format Analysts use. Previously
+  (as of v3.13), a person matched in an import file who held one of these non-Analyst positions had
+  their test-method rows silently skipped, with the import summary reporting how many rows were skipped
+  and why. **That skip is now retired** — import rows for non-Analyst people are written again, exactly
+  like Analysts, and the summary banner no longer mentions skipping anyone for this reason. If you have
+  an import file that includes Section Manager/Supervisor/Lead/Senior Engineer completion records, this
+  will now capture them.
+
 ## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
 This is the same page as everything above — I originally built this as a separate app and separate
@@ -676,9 +717,15 @@ the fix is scoped by position, not by deleting or altering any of the underlying
 target-date fix — a mocked brand-new Gas analyst starting 07 Sep 2026 (matching your own screenshot)
 now correctly shows the Week 1 course's target date as 14 Sep 2026 (start + 7 days) instead of
 07 Sep 2026 (the start date itself), correctly carries through to Week 2 and beyond, and the course
-correctly isn't flagged Overdue while its new, later target date hasn't passed yet. The full
-pre-existing suite (v3.9–v3.12 included) was re-run afterward and confirmed to still pass. However, this
-sandbox's network access doesn't
+correctly isn't flagged Overdue while its new, later target date hasn't passed yet; and new for v3.14 —
+a mocked Section Manager now correctly gets a second tab labeled "Test Methods" (not "Re-evaluation")
+showing the simplified completion-record panel with no Freq./Next due/Status columns, a manual edit to
+their Last completed date saves correctly, an Excel import correctly writes a completion record for
+them (reverting the v3.13 skip), and — the part most at risk of a silent regression — their Flag column
+and the dashboard's "needing attention" tile both stay completely unaffected even after that import,
+while a control check confirms the Analyst (Gas) tab, its columns, and its panel title are all
+unchanged. The full pre-existing suite (v3.9–v3.13 included) was re-run afterward and confirmed to still
+pass. However, this sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
 confirm the 24 people and their Passed/Not Started course statuses look right, add a test person
@@ -707,7 +754,10 @@ other Gas/Oil/Utility analysts with older evaluation history for the same patter
 the Progress-basis dropdown to "Full progress (all phases)" and confirm `HS-K-4000-001` now shows up
 correctly in the Progress %/Flag figures for people whose position started long enough ago, and try
 adding a test Phase 3 course in "Manage courses" with the Bucket field left blank to confirm it's
-now blocked from saving.
+now blocked from saving. For v3.14, open a Section Manager/Supervisor/Lead/Senior Engineer's own page
+and confirm the second tab is labeled "Test Methods" (not "Re-evaluation") and opens a plain completion
+record with no Status column; try recording one manually and via a real Excel import file that covers
+one of these positions, and confirm their Flag column and the dashboard tile stay unaffected either way.
 
 ## Everyday use
 
