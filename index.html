@@ -555,7 +555,10 @@
   let pendingAdminView = "admin";     // which view the admin password gate opens into once unlocked — "admin" | "methods-admin"
   let methodsAdminSearch = "";        // v3.6 — "Manage test methods" search box
   let methodsAdminAddOpen = false;
-  let personMethodsUi = { search: "", statusFilter: "assigned", openEvalForm: null, openHistory: new Set(), importMsg: "" }; // v3.6/3.7 — per-person Test Methods panel state (incl. Excel-import result banner), reset when switching people
+  // v3.16 — default statusFilter is "all" (was "assigned" pre-v3.16): the combined Courses + Test
+  // Methods panel now defaults to showing everything, matching the user's "I want all in the same area"
+  // ask, rather than starting pre-filtered down to only completed/assigned rows.
+  let personMethodsUi = { search: "", statusFilter: "all", openEvalForm: null, openHistory: new Set(), importMsg: "" }; // v3.6/3.7/3.16 — per-person Courses + Test Methods panel state (second tab, incl. Excel-import result banner), reset when switching people
   let dashImportMsg = ""; // v3.7 — result banner for the dashboard-level (bulk, multi-person) Excel import
   let personTab = "schedule"; // v3.7 — "schedule" | "reeval", which tab a person's own page shows; reset when switching people
   // v3.5 — "probation" | "full" | "test" — drives every section-wide % (tiles, position grid, People
@@ -1017,6 +1020,19 @@
   // through Change Position — the real roster's long-tenured, already-rotated people never went
   // through that flow, so v3.8 was a no-op for exactly the people who needed it. Curriculum membership
   // needs no rotation history at all: it only looks at the person's CURRENT position.)
+  // v3.16 — a curriculum "Test Method (OJT)" course and its embedded CL-T Document No. are the SAME
+  // real-world thing as the matching catalog entry in STATE.methods (CL-D-1000-0010's 179 methods) —
+  // per the user, listing both separately (a course row on one table, the identical method on another)
+  // read as confusing duplication once both were visible in the same place. Returns the exact
+  // STATE.methods key this course IS, or null if it's a plain Document course / has no catalog match —
+  // used to skip creating a separate course row for it, merging it into its one method row instead.
+  function courseMethodId(item){
+    if(!item || item.type !== "Test Method (OJT)") return null;
+    const m = (item.topic||"").match(/CL-T-\d{4}-\d{4}/);
+    if(!m) return null;
+    const norm = m[0].toLowerCase();
+    return Object.keys(STATE.methods).find(k=>k.toLowerCase()===norm) || null;
+  }
   function curriculumMethodCodes(positionKey){
     const posDef = POSITIONS[positionKey];
     if(!posDef) return new Set();
@@ -2512,28 +2528,90 @@
         ${tabsHtml}
         ${scheduleHtml}
       </section>
-      ${activeTab==="reeval" ? renderPersonMethodsSection(person) : ''}
+      ${activeTab==="reeval" ? renderPersonRecordSection(person, items) : ''}
     `;
   }
 
-  // ---------- v3.6: per-person Test Methods panel ----------
-  // v3.14 — this panel now renders for EVERY position, not just Analysts. `analyst` below picks between
-  // two presentations of the exact same underlying data (STATE.methods catalog, person.methods
-  // assignment + history, same checkbox/date-edit/Log-eval./History mechanics, same Excel import): the
-  // full re-evaluation-cadence view (Freq., Next due, Overdue/Due soon/etc. status) for Gas/Oil/Utility,
-  // vs. a plain completion-record view (just Doc No./Name/Last completed date) for Section
-  // Manager/SS/Lead/Senior Engineer — per the user: "these positions don't need re-evaluation, I just
-  // wanted to track when is the last time they complete the course." Uses personMethodEntriesRaw
-  // (ungated by position) rather than personMethodEntries, since the Analyst-only gate on THAT function
-  // exists specifically to keep this exact data out of the Flag column/dashboard tile for non-Analysts
-  // — it was never meant to hide it from the person's own page.
-  function renderPersonMethodsSection(person){
+  // ---------- v3.16: per-person Courses + Test Methods, ONE combined completion-record panel ----------
+  // v3.15 tried this as two separate panels/tables (a new Courses table above the existing Test Methods
+  // table). The user, after seeing it live: "So inconsistent if you separate into 2 areas like this.
+  // Even found the duplication for the test methods between top area and bottom area. I want all in the
+  // same area at the bottom one." Two real things were going on: (1) simply having two panels/tables for
+  // what's conceptually one job (track when something was completed) read as inconsistent; (2) a genuine
+  // data-model overlap — every position's curriculum embeds some courses of type "Test Method (OJT)"
+  // whose topic is literally a CL-T Document No. from the SAME 179-method CL-D-1000-0010 catalog the
+  // Test Methods table already lists (see courseMethodId() above) — so those were showing up as two
+  // separate, independently-editable rows for the exact same real-world document. This round fixes both:
+  // ONE panel, ONE table — courses (phase-grouped, minus any that are really a catalog test method) come
+  // first, the full test-method catalog (category-grouped, unchanged from v3.14) comes right after, no
+  // gap, no second header, one search box, one status filter, one Import from Excel entry point. A
+  // course whose topic embeds a catalog CL-T code is no longer shown as its own row at all — it's
+  // represented once, as that method's row, and editing that row's Completed date now ALSO marks the
+  // matching curriculum course Passed with the same date (previously only Excel import did this dual
+  // write — a manual edit here left the Planner/Schedule course stale, a real, separate bug this
+  // change closes). `personCoursesUi` (v3.15) is retired — search and the status filter are shared via
+  // the pre-existing `personMethodsUi`, applied to whichever row kind each option makes sense for: the
+  // basic all/completed/not-yet-completed split applies to BOTH courses and methods; the Analyst-only
+  // re-evaluation-specific options (Overdue/Due soon/etc.) are method-only, and hide the course rows
+  // while active, since "which courses are re-evaluation-overdue" isn't a question courses can answer.
+  function renderCourseRowUnified(item, ist, analyst){
+    const typeCls = item.type.indexOf("Test")===0 ? "type-test" : "type-doc";
+    return `<tr data-id="${item.id}">
+      <td class="chk-col"></td>
+      <td class="mono" style="font-size:11px">${esc(item.code)}</td>
+      <td>
+        <div class="name" title="${esc(item.topic)}">${esc(truncate(item.topic,58))}</div>
+        <span class="phase-chip ${item.phaseKey}">${phaseLabel(item.phaseKey)}</span>
+        <span class="type-badge ${typeCls}">${item.type.indexOf("Test")===0?'Test · '+esc(item.hours)+'h':'Doc · '+esc(item.hours)+'h'}</span>
+      </td>
+      ${analyst?`<td class="hint">—</td>`:''}
+      <td class="mono"><input type="date" class="admin-input" style="width:130px" data-course-lastdate="${esc(item.id)}" value="${ist.actualDate?esc(ist.actualDate):''}" title="Edit the completed date directly — sets Status to Passed; clearing it reverts to Not Started"></td>
+      ${analyst?`<td class="hint">—</td><td><span class="hint">${esc(ist.status)}</span></td>`:''}
+      <td></td>
+    </tr>`;
+  }
+  function renderPersonRecordSection(person, items){
     const analyst = isAnalystPosition(person.positionKey);
     // personMethodSummary is gated Analyst-only (see its own comment) and would report all-zero for a
     // non-Analyst, so it's only computed — and only meaningful — here when analyst is true.
     const sum = analyst ? personMethodSummary(person) : null;
     const ui = personMethodsUi;
-    let rows = personMethodEntriesRaw(person, {includeUnassigned: true})
+    const colCount = analyst ? 8 : 5;
+
+    // ---- Courses (curriculum), minus any that ARE a catalog test method (see courseMethodId above) ----
+    const p1p2 = items.filter(it=>it.phaseKey==="p1"||it.phaseKey==="p2").slice().sort((a,b)=> a.week-b.week || a.no-b.no);
+    const p3 = items.filter(it=>it.phaseKey==="p4").slice().sort((a,b)=>a.no-b.no);
+    // The status filter's basic three values (all/assigned="completed"/unassigned="not completed") apply
+    // to courses the same way they apply to methods below; the Analyst-only re-evaluation-specific values
+    // (overdue/retrain/due_first/due_soon/stale) describe method status only, so courses are hidden
+    // entirely while one of those is selected rather than showing an unfiltered, unrelated list under it.
+    const courseFilterApplies = ui.statusFilter==="all" || ui.statusFilter==="assigned" || ui.statusFilter==="unassigned";
+    let courseItems = !courseFilterApplies ? [] : p1p2.concat(p3).filter(item=>!courseMethodId(item)).filter(item=>{
+      const ist = itemState(person, item.id);
+      if(ui.statusFilter==="assigned") return !!ist.actualDate;
+      if(ui.statusFilter==="unassigned") return !ist.actualDate;
+      return true;
+    });
+    if(ui.search){
+      const q = ui.search.toLowerCase();
+      courseItems = courseItems.filter(item=> (item.code||"").toLowerCase().indexOf(q)>=0 || (item.topic||"").toLowerCase().indexOf(q)>=0);
+    }
+    let lastPhase = null;
+    const courseRowsHtml = courseItems.map(item=>{
+      const ist = itemState(person, item.id);
+      let phaseRow = "";
+      if(item.phaseKey!==lastPhase){
+        lastPhase = item.phaseKey;
+        const label = item.phaseKey==="p1" ? "Phase 1 — Orientation Essentials" : item.phaseKey==="p2" ? "Phase 2 — Critical Qualification (Probation)" : "Phase 3 — Continuing Plan";
+        phaseRow = `<tr class="admin-divider"><td colspan="${colCount}">${label}</td></tr>`;
+      }
+      return phaseRow + renderCourseRowUnified(item, ist, analyst);
+    }).join("");
+    const coursesHeaderRow = courseFilterApplies ? `<tr class="admin-divider" style="font-weight:700"><td colspan="${colCount}">Courses (this position's curriculum)</td></tr>` : "";
+
+    // ---- Test methods (CL-D-1000-0010 catalog) — unchanged filtering/rendering from v3.14, now just
+    // rendered directly below the courses instead of in a table of its own. ----
+    let methodRows = personMethodEntriesRaw(person, {includeUnassigned: true})
       .filter(r=>{
         if(ui.statusFilter==="assigned") return r.assigned;
         if(ui.statusFilter==="unassigned") return !r.assigned;
@@ -2544,11 +2622,10 @@
       });
     if(ui.search){
       const q = ui.search.toLowerCase();
-      rows = rows.filter(r=> r.id.toLowerCase().indexOf(q)>=0 || (r.method.name||"").toLowerCase().indexOf(q)>=0);
+      methodRows = methodRows.filter(r=> r.id.toLowerCase().indexOf(q)>=0 || (r.method.name||"").toLowerCase().indexOf(q)>=0);
     }
-    const colCount = analyst ? 8 : 5;
     let lastCat = null;
-    const bodyRows = rows.map(r=>{
+    const methodRowsHtml = methodRows.map(r=>{
       const cat = methodCategory(r.id);
       let catRow = "";
       if(cat!==lastCat){ lastCat = cat; catRow = `<tr class="admin-divider"><td colspan="${colCount}">${esc(cat)}</td></tr>`; }
@@ -2592,31 +2669,36 @@
         ${hist.map(h=>`${esc(fmtDate(parseISO(h.date)))} — ${esc(h.result||'')}${h.evalType?' · Type '+esc(h.evalType):''}${h.evaluator?' · '+esc(h.evaluator):''}${h.notes?' · '+esc(h.notes):''}`).join('<br>')}
       </div></td></tr>` : ""}`;
     }).join("");
+    const methodsHeaderRow = `<tr class="admin-divider" style="font-weight:700"><td colspan="${colCount}">Test Methods (CL-D-1000-0010 catalog)</td></tr>`;
+    const bodyRows = coursesHeaderRow + courseRowsHtml + methodsHeaderRow + methodRowsHtml;
+
     const headerHtml = analyst
-      ? `<h2>Test Methods — Competency &amp; Re-evaluation</h2>`
-      : `<h2>Test Methods — Completion Record</h2>`;
+      ? `<h2>Courses &amp; Test Methods — Competency &amp; Re-evaluation</h2>`
+      : `<h2>Courses &amp; Test Methods — Completion Record</h2>`;
+    const totalCourses = items.filter(it=>!courseMethodId(it)).length;
+    const completedCourses = items.filter(it=>!courseMethodId(it) && !!itemState(person,it.id).actualDate).length;
     const metaHtml = analyst
-      ? `Per CL-D-1000-0010 Rev.08 &nbsp;·&nbsp; ${sum.assigned} assigned &nbsp;·&nbsp; ${sum.overdue} overdue &nbsp;·&nbsp; ${sum.retrain} failed–retrain &nbsp;·&nbsp; ${sum.due_first} never evaluated &nbsp;·&nbsp; ${sum.due_soon} due soon${sum.stale?` &nbsp;·&nbsp; ${sum.stale} not required for current position (not counted above)`:''}`
-      : (()=>{ const assignedCount = personMethodEntriesRaw(person, {}).length; return `${assignedCount} test method${assignedCount===1?'':'s'} on record &nbsp;·&nbsp; a completion log only — re-evaluation tracking (CL-D-1000-0010) applies to the 3 Analyst positions (Gas/Oil/Utility) only, so nothing here counts toward the Flag column or dashboard`; })();
+      ? `${completedCourses} of ${totalCourses} curriculum courses completed &nbsp;·&nbsp; Per CL-D-1000-0010 Rev.08: ${sum.assigned} test methods assigned &nbsp;·&nbsp; ${sum.overdue} overdue &nbsp;·&nbsp; ${sum.retrain} failed–retrain &nbsp;·&nbsp; ${sum.due_first} never evaluated &nbsp;·&nbsp; ${sum.due_soon} due soon${sum.stale?` &nbsp;·&nbsp; ${sum.stale} not required for current position (not counted above)`:''}`
+      : (()=>{ const assignedCount = personMethodEntriesRaw(person, {}).length; return `${completedCourses} of ${totalCourses} curriculum courses completed &nbsp;·&nbsp; ${assignedCount} test method${assignedCount===1?'':'s'} on record &nbsp;·&nbsp; re-evaluation tracking (CL-D-1000-0010) applies to the 3 Analyst positions (Gas/Oil/Utility) only, so nothing here counts toward the Flag column or dashboard`; })();
     const statusFilterHtml = analyst ? `
           <select id="personMethodStatusFilter">
-            <option value="assigned" ${ui.statusFilter==='assigned'?'selected':''}>Assigned only</option>
-            <option value="all" ${ui.statusFilter==='all'?'selected':''}>All ${Object.keys(STATE.methods).length} methods</option>
-            <option value="unassigned" ${ui.statusFilter==='unassigned'?'selected':''}>Not yet assigned</option>
-            <option value="overdue" ${ui.statusFilter==='overdue'?'selected':''}>Overdue</option>
-            <option value="retrain" ${ui.statusFilter==='retrain'?'selected':''}>Failed — retrain</option>
-            <option value="due_first" ${ui.statusFilter==='due_first'?'selected':''}>Never evaluated</option>
-            <option value="due_soon" ${ui.statusFilter==='due_soon'?'selected':''}>Due soon</option>
-            ${sum.stale?`<option value="stale" ${ui.statusFilter==='stale'?'selected':''}>Not required for current position (${sum.stale})</option>`:''}
+            <option value="all" ${ui.statusFilter==='all'?'selected':''}>All courses &amp; ${Object.keys(STATE.methods).length} methods</option>
+            <option value="assigned" ${ui.statusFilter==='assigned'?'selected':''}>Completed / assigned only</option>
+            <option value="unassigned" ${ui.statusFilter==='unassigned'?'selected':''}>Not yet completed / assigned</option>
+            <option value="overdue" ${ui.statusFilter==='overdue'?'selected':''}>Overdue (test methods only)</option>
+            <option value="retrain" ${ui.statusFilter==='retrain'?'selected':''}>Failed — retrain (test methods only)</option>
+            <option value="due_first" ${ui.statusFilter==='due_first'?'selected':''}>Never evaluated (test methods only)</option>
+            <option value="due_soon" ${ui.statusFilter==='due_soon'?'selected':''}>Due soon (test methods only)</option>
+            ${sum.stale?`<option value="stale" ${ui.statusFilter==='stale'?'selected':''}>Not required for current position (${sum.stale}, test methods only)</option>`:''}
           </select>` : `
           <select id="personMethodStatusFilter">
-            <option value="assigned" ${ui.statusFilter==='assigned'?'selected':''}>Recorded only</option>
-            <option value="all" ${ui.statusFilter==='all'?'selected':''}>All ${Object.keys(STATE.methods).length} methods</option>
-            <option value="unassigned" ${ui.statusFilter==='unassigned'?'selected':''}>Not yet recorded</option>
+            <option value="all" ${ui.statusFilter==='all'?'selected':''}>All courses &amp; ${Object.keys(STATE.methods).length} methods</option>
+            <option value="assigned" ${ui.statusFilter==='assigned'?'selected':''}>Completed / recorded only</option>
+            <option value="unassigned" ${ui.statusFilter==='unassigned'?'selected':''}>Not yet completed / recorded</option>
           </select>`;
     const toolbarHint = analyst
-      ? `Tick to assign a method to this person; untick to remove it from their qualification list (history is kept). "Failed — retrain" overrides the date-based status until a new, passing evaluation is logged. Completed date can be edited directly in the table below. Importing from Excel updates every person the file matches (not just this one) and, from the same file, also marks any matching curriculum course Passed on their Planner/Schedule tab — use the dashboard's "Import test results (Excel)" button if the file covers many people at once.`
-      : `Tick to record a test method for this person; untick to remove it from their record (history is kept). Completed date can be edited directly in the table below, or logged with a result/evaluator/notes via "Log eval." Importing from Excel updates every person the file matches (not just this one) and, from the same file, also marks any matching curriculum course Passed on their Planner/Schedule tab — use the dashboard's "Import test results (Excel)" button if the file covers many people at once. Nothing recorded here drives a warning anywhere in the app, since re-evaluation tracking doesn't apply to this position.`;
+      ? `Courses come from this position's curriculum directly (not tickable). Tick a test method to assign it; untick to remove it from the qualification list (history is kept). "Failed — retrain" overrides the date-based status until a new, passing evaluation is logged. Any Completed date can be edited directly in the table — for a course whose row IS a catalog test method, editing it here also marks the course Passed on the Planner/Schedule tab, so the two never disagree. Importing from Excel updates every person the file matches (not just this one) and also marks matching curriculum courses Passed — use the dashboard's "Import test results (Excel)" button if the file covers many people at once.`
+      : `Courses come from this position's curriculum directly (not tickable). Tick a test method to record it for this person; untick to remove it from their record (history is kept). Any Completed date can be edited directly in the table, or a test method logged with a result/evaluator/notes via "Log eval." Importing from Excel updates every person the file matches (not just this one) and also marks matching curriculum courses Passed — use the dashboard's "Import test results (Excel)" button if the file covers many people at once. Nothing here drives a warning anywhere in the app, since re-evaluation tracking doesn't apply to this position.`;
     return `
       <section class="panel">
         <div class="panel-head">
@@ -2624,7 +2706,7 @@
           <div class="meta">${metaHtml}</div>
         </div>
         <div class="people-toolbar">
-          <input type="text" id="personMethodSearch" placeholder="Search doc no. or name" value="${esc(ui.search)}" style="width:220px">
+          <input type="text" id="personMethodSearch" placeholder="Search code, doc no. or name" value="${esc(ui.search)}" style="width:220px">
           ${statusFilterHtml}
           <button class="btn small" id="openMethodsImport" title="Applies to every matching person found in the file, not just this one — for a multi-person file, the dashboard's &quot;Import test results (Excel)&quot; button is the more direct entry point">Import from Excel…</button>
           <input type="file" id="methodsImportFile" accept=".xlsx,.xls" style="display:none">
@@ -2632,8 +2714,8 @@
         </div>
         ${ui.importMsg ? `<div class="hint" id="methodsImportMsg" style="white-space:pre-line;padding:8px 12px;margin:0 0 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2, rgba(0,0,0,.03))">${esc(ui.importMsg)}</div>` : ''}
         <div class="gantt-scroll"><table class="people admin-table">
-          <thead><tr><th style="width:34px"></th><th>Doc No.</th><th>Test Method Name</th>${analyst?'<th>Freq.</th>':''}<th>${analyst?'Last evaluated':'Last completed'}</th>${analyst?'<th>Next due</th><th>Status</th>':''}<th></th></tr></thead>
-          <tbody>${bodyRows || `<tr><td colspan="${colCount}" class="empty-state">No methods match this filter.</td></tr>`}</tbody>
+          <thead><tr><th style="width:34px"></th><th>Code / Doc No.</th><th>Name</th>${analyst?'<th>Freq.</th>':''}<th>Completed date</th>${analyst?'<th>Next due</th><th>Status</th>':''}<th></th></tr></thead>
+          <tbody>${bodyRows || `<tr><td colspan="${colCount}" class="empty-state">Nothing matches this filter.</td></tr>`}</tbody>
         </table></div>
       </section>`;
   }
@@ -2999,7 +3081,7 @@
         td.addEventListener("click", ()=>{
           selectedPersonId = td.getAttribute("data-open"); view="person";
           personTab = "schedule";
-          personMethodsUi = { search: "", statusFilter: "assigned", openEvalForm: null, openHistory: new Set(), importMsg: "" };
+          personMethodsUi = { search: "", statusFilter: "all", openEvalForm: null, openHistory: new Set(), importMsg: "" };
           paint();
         });
       });
@@ -3406,6 +3488,33 @@
         });
       });
 
+      // v3.16 — combined Courses + Test Methods panel (second tab, every position). One shared search
+      // box and status filter (see renderPersonRecordSection above) drive both row kinds; there is no
+      // separate course search/filter anymore (personCoursesUi from v3.15 is retired).
+      // Course Completed date, edited directly — deliberately drives the SAME ist.status/ist.actualDate
+      // pair the Planner/Schedule tab's Status dropdown already governs (see that handler above):
+      // entering a date marks the course Passed as of that date; clearing it reverts to Not Started. Per
+      // the user's confirmed v3.15 choice, these two views of the same course are never allowed to
+      // disagree. Only rendered for courses that AREN'T a catalog test method (see courseMethodId) — a
+      // method-backed course uses the data-method-lastdate handler below instead, which now also keeps
+      // the matching course in sync.
+      root.querySelectorAll("[data-course-lastdate]").forEach(inp=>{
+        inp.addEventListener("change", ()=>{
+          const person = STATE.people[selectedPersonId]; if(!person) return;
+          const id = inp.getAttribute("data-course-lastdate");
+          const ist = itemState(person, id);
+          if(inp.value){
+            ist.status = "Passed";
+            ist.actualDate = inp.value;
+          } else {
+            ist.status = "Not Started";
+            ist.actualDate = "";
+          }
+          scheduleSave();
+          paint();
+        });
+      });
+
       // v3.6 — Test Methods panel (competency / re-evaluation tracking, CL-D-1000-0010)
       const methodSearchEl = document.getElementById("personMethodSearch");
       if(methodSearchEl) methodSearchEl.addEventListener("input", ()=>{
@@ -3416,13 +3525,21 @@
       });
       const methodStatusFilterEl = document.getElementById("personMethodStatusFilter");
       if(methodStatusFilterEl) methodStatusFilterEl.addEventListener("change", ()=>{ personMethodsUi.statusFilter = methodStatusFilterEl.value; paint(); });
-      // v3.7 — Completed / "Last evaluated" date, edited directly in the table
+      // v3.7/v3.16 — Completed / "Last evaluated" date, edited directly in the table. As of v3.16, this
+      // ALSO keeps the matching curriculum course (if this method IS one — see courseMethodId/
+      // findCourseByMethodCode) in sync: previously only Excel import updated both the method record and
+      // the Planner/Schedule course together (see markCourseImported below); a manual edit here used to
+      // leave that course stale. Now a manual edit does the exact same dual write Excel import already
+      // does, closing that gap — editing either the course row or the merged method row for the same
+      // real-world document always keeps Planner/Schedule and this panel in agreement.
       root.querySelectorAll("[data-method-lastdate]").forEach(inp=>{
         inp.addEventListener("change", ()=>{
           const person = STATE.people[selectedPersonId]; if(!person) return;
           const mid = inp.getAttribute("data-method-lastdate");
           if(!inp.value) return; // don't clear an evaluation date by blanking the field
           setMethodLastEvaluatedDate(person, mid, inp.value);
+          const linkedCourse = findCourseByMethodCode(person, mid);
+          if(linkedCourse) markCourseImported(person, linkedCourse, inp.value);
           scheduleSave();
           paint();
         });
