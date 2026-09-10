@@ -19,7 +19,7 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.16) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
+  (v3.17) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
   "Export Report", **"Test Methods — Competency & Re-evaluation Tracking (v3.6)"**, **"Re-evaluation
   tab, editable dates & Excel import (new, v3.7)"**, **"Test methods now scope to your current
   position, and Excel import now updates the Planner/Schedule tab too (v3.8)"**, **"Test-method
@@ -32,8 +32,9 @@ all. This version saves every change straight to a shared database, so:
   enforced unique, and test-method re-evaluation warnings are now truly Analyst-only (v3.13)"**,
   **"Non-Analyst positions now get a Test Methods completion-record tab too (v3.14)"**,
   **"All courses now get a completion-record tab too, for every position including Analysts
-  (v3.15)"**, and **"Courses and Test Methods are now one merged table, and a genuine duplication
-  is now eliminated (v3.16)"** below for what's new.
+  (v3.15)"**, **"Courses and Test Methods are now one merged table, and a genuine duplication
+  is now eliminated (v3.16)"**, and **"Test Methods now show only what's actually in a position's
+  own curriculum, and the tick/assign checkbox is gone (v3.17)"** below for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -604,6 +605,50 @@ courses.
 A plain, non-method-linked course row still works exactly as it did in v3.15 — editable Completed date,
 linked to the Planner/Schedule Status dropdown, same as before.
 
+## Test Methods now show only what's actually in a position's own curriculum, and the tick/assign checkbox is gone (v3.17)
+
+After seeing v3.16 live, you sent a screenshot of a Shift Supervisor's page with a red box around
+CL-T-6000-0027 through CL-T-6000-0031 — Polyolefins-section methods (Seal Strength, Spiral flow, and
+similar), all inactive, all sitting unticked in the Test Methods section — and wrote: *"Why these
+courses (these test methods in particular) is in the profile of Olefins QC Supervisor (as they're test
+methods of Polyolefins), and many other positions as well they're mis-functioning, I understand you
+might let me use tick function to select and unselect but I don't want it. I just want courses which
+actually belong to the functional training plan of each position appear in their profile
+accordingly."*
+
+That was a fair read of what v3.16 (and everything before it) actually did: the Test Methods section
+always listed the full 179-method CL-D-1000-0010 catalog for every position, with a checkbox to
+manually tick a method "in" or "out." Nothing stopped a method with zero connection to a position —
+like a Polyolefins method on an Olefins Supervisor's page — from sitting there, tickable, forever.
+
+**v3.17 removes that catalog-wide list and the tick function entirely. A position's Test Methods
+section now shows only the methods that are genuinely part of that position's own curriculum** — the
+same real CL-D-1000-0010 mapping already used since v3.9/v3.10 to exclude irrelevant methods from
+overdue warnings, now used to decide what's shown at all, for every position, not just the three
+Analyst ones:
+
+**1. No more manual ticking, anywhere.** The checkbox column is gone from every Test Methods row, for
+every position. A method's presence in the list is no longer something anyone selects — it's
+automatic, driven purely by whether that position's curriculum actually includes it, exactly the way
+Courses already worked.
+
+**2. A method outside the position's curriculum can no longer appear at all.** Not unticked, not
+greyed out — simply not in the list. The Polyolefins methods from your screenshot (and their
+equivalents on every other position) are gone from every profile except the Polyolefins positions
+that actually own them.
+
+**3. "Log eval." is available immediately.** Since there's no more separate "assign" step, every
+method listed for a position can have an evaluation logged straight away.
+
+**4. The meta line, filter dropdown, and counts all now reflect the position's real curriculum size**
+instead of the full 179-method catalog — e.g. "92 test methods in this position's curriculum" for a
+Shift Supervisor, not "179."
+
+**Nothing was deleted from the database.** If a position had a stray method record from before this
+fix — assigned, with history, the way CL-T-6000-0027 was on the Shift Supervisor in your screenshot —
+that record is untouched in the database; it simply doesn't render anywhere anymore. If a genuine
+process reason ever comes up to look at that old record again, it's still there.
+
 ## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
 This is the same page as everything above — I originally built this as a separate app and separate
@@ -811,7 +856,20 @@ selector updates (not behavior changes) — the v3.15-era ones that had been upd
 of two panels" now correctly target "the" panel again since there's only one; a few also needed their
 expected header/panel-title text updated to match the new "Courses & Test Methods —" wording and merged
 column headers. The full pre-existing suite (v3.9–v3.15 included) was re-run afterward and confirmed to
-still pass. However, this sandbox's network access doesn't
+still pass; and new for v3.17 — a mocked Shift Supervisor built to mirror your exact screenshot (a
+Polyolefins method, CL-T-6000-0027, left over from before this fix with `assigned: true` and real
+evaluation history, plus a second Polyolefins method that was never assigned at all) now correctly shows
+neither method anywhere on their page under any filter including "All," while a genuine
+Shift-Supervisor-curriculum method appears automatically with no tick required; no checkbox/tick control
+exists anywhere in the merged table for any position; "Log eval." is available immediately for a listed
+method with no separate assign step first; and — checked directly against the mocked database rather
+than just the screen — the stray CL-T-6000-0027 record is confirmed still present and completely
+unmodified underneath, with zero database writes triggered by simply viewing the page, proving the fix
+is a display filter, not a data deletion. The full pre-existing suite (v3.9–v3.16 included, with the
+shared Excel-import fixture regenerated using real curriculum-matched Document Nos. for the mocked Gas
+and Oil people it exercises, since the old fixture had been using Document Nos. that happened not to
+belong to either mocked person's actual curriculum) was re-run afterward and confirmed to still pass.
+However, this sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
 confirm the 24 people and their Passed/Not Started course statuses look right, add a test person
@@ -847,7 +905,12 @@ one of these positions, and confirm their Flag column and the dashboard tile sta
 For v3.15, open anyone's second tab (any position) and confirm the new "Courses — Completion Record"
 table appears above the existing methods table, enter a Completed date on a course there and switch to
 Planner/Schedule to confirm the same course now shows Passed with that same date, then clear the date
-and confirm it reverts to Not Started on both tabs.
+and confirm it reverts to Not Started on both tabs. For v3.17, open the Shift Supervisor's page from
+your screenshot (or any Supervisor/Engineer/Section Manager) and confirm the Polyolefins CL-T-6000-xxx
+rows are gone entirely — not unticked, just absent — under every filter including "All"; confirm there's
+no checkbox anywhere in the table for any position; and spot-check a couple of other positions
+(Gas/Oil/Utility Analysts, Lead/Senior Engineer) to confirm each one's Test Methods list now looks like
+a real, position-specific curriculum rather than the full catalog.
 
 ## Everyday use
 
