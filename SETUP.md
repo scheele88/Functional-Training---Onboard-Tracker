@@ -19,7 +19,7 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.21) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
+  (v3.22) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
   "Export Report", **"Test Methods — Competency & Re-evaluation Tracking (v3.6)"**, **"Re-evaluation
   tab, editable dates & Excel import (new, v3.7)"**, **"Test methods now scope to your current
   position, and Excel import now updates the Planner/Schedule tab too (v3.8)"**, **"Test-method
@@ -38,8 +38,10 @@ all. This version saves every change straight to a shared database, so:
   completed under a previous position now stay visible, just marked inactive (v3.18)"**,
   **"Excel import now matches document courses by their real Document No., not just the Lab-code
   (v3.19)"**, **"Manage courses" now has a plan-revision import and a per-row Edit button,
-  including applies-to editing (v3.20)"**, and **"Plan-revision import no longer re-flags Trainer as
-  changed on every re-import (v3.21)"** below for what's new.
+  including applies-to editing (v3.20)"**, **"Plan-revision import no longer re-flags Trainer as
+  changed on every re-import (v3.21)"**, and **"Manage test methods" now has an import for
+  CL-D-1000-0010 too, and rows require Edit/Save instead of saving on every keystroke (v3.22)"** below
+  for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -837,6 +839,45 @@ curricula. Trainer is untouched everywhere else — still shown and still hand-e
 each row's Edit panel (v3.20) for anyone who wants one recorded there; this change only affects what
 the plan-revision import compares and applies.
 
+## "Manage test methods" now has an import for CL-D-1000-0010 too, and rows require Edit/Save instead of saving on every keystroke (v3.22)
+
+You asked for the "Manage test methods" tab to get the same treatment as "Manage courses" just got:
+*"Ok, now I want do the very similar for the tab Manage test method: A function of update by importing
+the CL-D-1000-0010 - Competency evaluation list for testing method. Now I see each row can be edited
+easily without any warning or asking to confirm? If yes, similarly create a button to edit or whatever
+you think that most appropriate"*
+
+**1. Import a new revision of CL-D-1000-0010 and review it before anything changes.** A new **"Import
+method list (CL-D-1000-0010)"** button sits in the "Manage test methods" toolbar, next to "+ Add custom
+method." Pick the updated workbook and it reads the "Competency evaluation list" sheet's real column
+layout (Document No., Test Method Name, Classroom, the four Type-of-evaluation columns, Re-evaluation
+Frequency, Re-evaluation Type, Remarks) and compares every row, matched by Document No., against what's
+currently on record:
+
+- **New methods** ("New") — added with the Classroom and Training-type values read straight from the
+  file, and you can uncheck any you don't want before applying.
+- **Changed methods** — a Test Method Name, Frequency, Re-evaluation Type, or Remarks difference from
+  what's on record is shown as a plain diff. Classroom and Training-type aren't compared here, because
+  (like Trainer on the courses side, v3.21) neither one is actually displayed or used anywhere else in
+  the tracker — diffing them would just be noise with no visible effect.
+- **Possibly obsolete methods** — anything currently active on record that the new file no longer lists
+  is offered as **Deactivate**: kept on record with full history, just marked inactive, the same as
+  Deactivate has always worked on this tab. Nothing is ever hard-deleted by an import.
+- **Nothing is saved until you click Apply.** Every row has its own checkbox (all checked by default),
+  and — unlike the course plan import — there's no effective-date/scope step here, since a method's
+  re-evaluation cadence isn't tied to anyone's hire date; Apply is one immediate action.
+
+**2. Every row now requires Edit → Save instead of saving on every keystroke.** You were right that a
+row's Name, Frequency, Re-evaluation type, and Remarks used to update the database the instant you
+changed them, with no way to review or back out. Each row now shows plain read-only text until you click
+its new **Edit** button, which unlocks just that row (only one row at a time, so you can't lose track of
+what's mid-edit) into an editable copy — change whatever fields you need, then click **Save** to commit
+it, or **Cancel** to discard the changes and leave the record exactly as it was. While a row is being
+edited, the Edit and Deactivate buttons on every other row are disabled until you finish, matching how
+the course Edit panel has always worked (v3.20).
+
+Both features are additive — no schema change, so there's no new `migration_*.sql` file for this round.
+
 ## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
 This is the same page as everything above — I originally built this as a separate app and separate
@@ -1124,6 +1165,26 @@ Changed on its own; and after Apply, the on-record trainer for `CL-M-1000-0001` 
 completely untouched (still whatever it was before the import, not the file's value) while the hours
 change still applies as before, confirming Trainer editing itself (via the Edit panel) is unaffected —
 only the plan-import comparison and apply path changed. The full pre-existing suite (29 files) was
+re-run afterward and confirmed to still pass. `node --check` clean throughout; and new for v3.22 — a
+dedicated 32-check suite against a synthetic CL-D-1000-0010 workbook built from the real file's column
+layout: confirmed a row's Name/Frequency/Remarks show as plain text with no inputs until Edit is
+clicked; confirmed clicking Edit on one row disables the Edit and Deactivate buttons on every other row,
+and re-enables them on Cancel or Save; confirmed Cancel discards every in-progress field change (no
+`onb_methods` save fires at all) while Save commits exactly what was typed and does trigger a save; on
+the import side, confirmed an unchanged method never appears on the review screen, a method with a
+Frequency + Re-evaluation-type + Name change shows all three diffs correctly, a brand-new method appears
+under "New" and — when its checkbox is unchecked before Apply — is correctly not created, and a method
+missing from the new file appears as "possibly obsolete" and, after Apply, is kept on record but marked
+Inactive; also confirmed a method someone had just hand-edited via Save stays completely untouched by an
+import that doesn't actually change it. Along the way, writing this suite caught a real bug in the first
+draft of the edit-gating implementation: updating one field's in-progress value was triggering a full
+screen repaint that silently reverted any *other* field in the same row you'd already typed into but
+hadn't yet tabbed out of — fixed by no longer repainting on every keystroke inside an open row (Save and
+Cancel still repaint, since those are the moments the screen actually needs to change). One older
+regression file (`_pw_methods_merge.js`) that predated this round's edit-gating still drove the old
+"live-editable, no Edit button" inputs directly; updated it to click Edit before changing fields and to
+read the post-Save values back as the new plain-text cells, and confirmed it also still passes (22
+checks) with no change to what it's actually verifying. The full pre-existing suite (30 files) was
 re-run afterward and confirmed to still pass. `node --check` clean throughout.
 However, this sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
@@ -1189,7 +1250,13 @@ that should instead be a manual Edit, and that changed items' diffs look right �
 spot-check a few of the affected people's own pages. For v3.21, this is the same "Import plan
 revision" flow — just confirm that a course whose only difference from what's on record is its
 Trainer name no longer shows up in the Changed section at all (it used to, every time, even for a
-file you'd already imported before).
+file you'd already imported before). For v3.22, open "Manage test methods" and confirm every row now
+shows plain text with an Edit button — try Edit on one row, change a field, click Cancel, and confirm
+nothing changed; then Edit the same row again, change Frequency or Remarks, click Save, and confirm it
+sticks after navigating away and back. Then get a real, up-to-date copy of CL-D-1000-0010 and try
+"Import method list" against it — read through the review screen the same careful way as the course
+import above before clicking Apply — then spot-check a few of the affected methods on the admin table
+and on a real person's Test Methods tab.
 
 ## Everyday use
 

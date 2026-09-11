@@ -605,6 +605,21 @@
   let planImportReview = null;
   let planImportError = "";           // v3.20 — shown on the Manage-courses toolbar when a plan-revision file couldn't be read at all
   let adminApplyOpen = false;         // whether the effective-date/scope picker for pending edits is open
+  // v3.22 — "Manage test methods": per the user, edits there used to save the instant a field changed,
+  // with no way to review or undo before it hit the database. methodsAdminEditId is the Doc No.
+  // (object key in STATE.methods) of the one row currently unlocked for editing, or null — matching the
+  // "one row at a time" pattern the course Edit panel already uses. methodsAdminDraft holds that row's
+  // in-progress field values (a plain copy, not STATE itself) until "Save" is clicked; "Cancel" just
+  // discards it. Nothing about a method (Frequency, Re-eval type, Remarks, Name) changes until Save.
+  let methodsAdminEditId = null;
+  let methodsAdminDraft = null;
+  // v3.22 — the "Import method list (CL-D-1000-0010)" review screen's working state, or null when not
+  // open. { filename, added, changed, obsolete, excluded: Set<"added|id"|"changed|id"|"obsolete|id"> }
+  // Same "review before applying" shape as the v3.20 plan-revision import — nothing here touches
+  // STATE.methods until Apply. Unlike courses, a method has no per-curriculum/effective-date concept
+  // (re-evaluation cadence isn't tied to a hire date), so Apply here is a single, immediate action.
+  let methodsImportReview = null;
+  let methodsImportError = "";        // shown on the Manage-test-methods toolbar when the file couldn't be read at all
 
   const COURSE_KEY_ORDER = ["sm","ss","eng","gas","oil","utility"];
   const COURSE_KEY_LABELS = {
@@ -965,6 +980,90 @@
       if(added.length || changed.length || obsolete.length) perCurriculum[courseKey] = { added, changed, obsolete };
     });
     return { perCurriculum, unclassifiable };
+  }
+  // v3.22 — "Import method list (CL-D-1000-0010)": read a new revision of the Competency evaluation
+  // list and review new/changed/possibly-obsolete methods before anything is saved, same
+  // review-before-apply shape as the v3.20 plan-revision import above. The real source file (verified
+  // directly against your CLD10000010_..._Rev.08.xlsx) is one flat table — no per-position sheets, so
+  // there's no cross-curriculum grouping needed here, unlike the course import.
+  //
+  // Column layout, confirmed against the real file: a merged 3-row header (rows 5-7) — Document No.
+  // (col B), Test Method Name (C), Classroom Y/blank (D), then "Type of evaluation" A/B/C/D as four
+  // separate Y/blank columns (E/F/G/H) rather than one value, Re-evaluation Frequency in years or "-"
+  // (I), Re-evaluation Type of evaluation, e.g. "A"/"Intralaboratory", or "-" (J), and Remarks (K) —
+  // confirmed to hold real content (cross-references to other documents), not boilerplate. A stray,
+  // unlabeled column L in the real file (single letters, no header) is not part of any documented
+  // column and is ignored. Below the data, the file also has a legend block ("Note:", "A", "B", ...,
+  // "Intralaboratory") that never has a real Document-No.-shaped value in column B, so it's excluded
+  // by the same shape check that finds real rows — no need to hard-code where the data ends.
+  function findMethodsCatalogHeaderRow(rows){
+    for(let i=0;i<rows.length;i++){
+      const c1 = String((rows[i]||[])[1]||"").trim().toLowerCase();
+      const c2 = String((rows[i]||[])[2]||"").trim().toLowerCase();
+      if(/document no/.test(c1) && /test method name/.test(c2)) return i;
+    }
+    return -1;
+  }
+  const METHOD_DOC_CODE_RE = /^[A-Za-z0-9]+(-[A-Za-z0-9]+){2,5}$/; // e.g. CL-T-2000-0001 — also what
+                                                                     // naturally excludes the legend rows
+  function parseMethodsCatalogWorkbook(wb){
+    for(const sheetName of wb.SheetNames){
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header:1, raw:false, defval:"" });
+      const headerIdx = findMethodsCatalogHeaderRow(rows);
+      if(headerIdx<0) continue;
+      const items = [];
+      for(let r=headerIdx+1;r<rows.length;r++){
+        const cells = (rows[r]||[]).map(c=>String(c==null?"":c).trim());
+        const id = cells[1]||"";
+        if(!METHOD_DOC_CODE_RE.test(id)) continue; // skips the sub-header rows and the trailing legend
+        const name = cells[2]||"";
+        if(!name) continue;
+        const classroom = (cells[3]||"").toUpperCase()==="Y";
+        let trainingType = null;
+        const letters = [];
+        ["A","B","C","D"].forEach((letter, idx)=>{ if((cells[4+idx]||"").toUpperCase()==="Y") letters.push(letter); });
+        if(letters.length) trainingType = letters.join(",");
+        const freqRaw = cells[8]||"";
+        const freq_years = /^\d+$/.test(freqRaw) ? Number(freqRaw) : null;
+        const reRaw = cells[9]||"";
+        const reeval_type = (reRaw && reRaw!=="-") ? reRaw : null;
+        const remarks = cells[10]||"";
+        items.push({ id, name, classroom, training_type: trainingType, freq_years, reeval_type, remarks });
+      }
+      if(items.length) return { items, sheetName };
+    }
+    return { items: [], sheetName: null };
+  }
+  function buildMethodsCatalogDiff(items){
+    const added = [], changed = [];
+    const matchedKeys = new Set();
+    const byIdLower = {};
+    Object.keys(STATE.methods).forEach(k=>{ byIdLower[k.toLowerCase()] = k; });
+    items.forEach(imp=>{
+      const existingKey = byIdLower[imp.id.toLowerCase()];
+      if(!existingKey){ added.push(imp); return; }
+      matchedKeys.add(existingKey);
+      const existing = STATE.methods[existingKey];
+      const fieldDiffs = {};
+      if((existing.name||"").trim()!==imp.name.trim() && imp.name) fieldDiffs.name = { from: existing.name||"", to: imp.name };
+      const existingFreq = (existing.freq_years===""||existing.freq_years==null) ? null : Number(existing.freq_years);
+      if(existingFreq !== imp.freq_years) fieldDiffs.freq_years = { from: existingFreq, to: imp.freq_years };
+      if((existing.reeval_type||null) !== (imp.reeval_type||null)) fieldDiffs.reeval_type = { from: existing.reeval_type||null, to: imp.reeval_type||null };
+      if((existing.remarks||"").trim() !== (imp.remarks||"").trim()) fieldDiffs.remarks = { from: existing.remarks||"", to: imp.remarks||"" };
+      // classroom/training_type are read from the file (and set on a brand-new "added" method below)
+      // but deliberately NOT diffed for an existing method — neither field is shown or used anywhere
+      // else in the app (see the normalizeMethod-style read at their only other reference), so flagging
+      // a change there would ask for a confirmation the admin has no way to see the effect of.
+      if(Object.keys(fieldDiffs).length) changed.push({ id: existingKey, name: existing.name||imp.name, fieldDiffs });
+    });
+    const obsolete = [];
+    Object.keys(STATE.methods).forEach(k=>{
+      const m = STATE.methods[k];
+      if(m.active===false) return;
+      if(matchedKeys.has(k)) return;
+      obsolete.push({ id: k, name: m.name||"" });
+    });
+    return { added, changed, obsolete };
   }
   // Derived entirely from the effective course list (not a fixed lookup table), so admin edits —
   // adding a supplemental course, deactivating one, or moving one between phases — immediately and
@@ -2608,23 +2707,40 @@
       let catRow = "";
       if(cat!==lastCat){ lastCat = cat; catRow = `<tr class="admin-divider"><td colspan="7">${esc(cat)}</td></tr>`; }
       const active = m.active!==false;
-      return `${catRow}<tr data-method-admin-id="${esc(m.id)}"${active?'':' class="row-inactive"'}>
+      // v3.22 — per the user ("each row can be edited easily without any warning or asking to
+      // confirm"): a row's Name/Frequency/Re-eval type/Remarks are now plain read-only text until
+      // "Edit" is clicked, which unlocks exactly this one row (matching the course Edit panel's
+      // one-at-a-time pattern) into a working copy (methodsAdminDraft) that only reaches STATE.methods
+      // — and only gets saved to the database — once "Save" is clicked; "Cancel" discards it untouched.
+      const editing = methodsAdminEditId===m.id;
+      const otherRowEditing = !!(methodsAdminEditId && !editing);
+      const d = editing ? (methodsAdminDraft||m) : m;
+      const nameCell = editing
+        ? `<input type="text" class="admin-input" data-method-edit-field="name" value="${esc(d.name||'')}">`
+        : esc(m.name||'');
+      const freqCell = editing
+        ? `<select class="admin-input" data-method-edit-field="freq_years">${METHOD_FREQ_VALUES.map(v=>`<option value="${v===null?'':v}" ${(d.freq_years===v||(v===null&&d.freq_years==null))?'selected':''}>${v===null?'- (none)':v+' yr'}</option>`).join("")}</select>`
+        : (m.freq_years==null ? '- (none)' : m.freq_years+' yr');
+      const typeCell = editing
+        ? `<select class="admin-input" data-method-edit-field="reeval_type"><option value="" ${!d.reeval_type?'selected':''}>—</option>${METHOD_EVAL_TYPE_VALUES.map(v=>`<option value="${v}" ${d.reeval_type===v?'selected':''}>${v}</option>`).join("")}</select>`
+        : (m.reeval_type||'—');
+      const remarksCell = editing
+        ? `<input type="text" class="admin-input" data-method-edit-field="remarks" value="${esc(d.remarks||'')}" style="width:130px">`
+        : (m.remarks ? esc(m.remarks) : '<span class="hint">—</span>');
+      const actionsCell = editing
+        ? `<button class="btn small primary" data-method-admin-edit-save="${esc(m.id)}">Save</button>
+           <button class="btn small" data-method-admin-edit-cancel="${esc(m.id)}">Cancel</button>`
+        : `<button class="btn small" data-method-admin-edit-open="${esc(m.id)}"${otherRowEditing?' disabled title="Finish editing the other row first"':''}>Edit</button>
+           <button class="btn small" data-method-admin-toggle="${esc(m.id)}" data-method-admin-active="${active?'true':'false'}"${otherRowEditing?' disabled':''}>${active?'Deactivate':'Reactivate'}</button>`;
+      const rowClasses = [!active?'row-inactive':'', editing?'admin-pending-row':''].filter(Boolean).join(' ');
+      return `${catRow}<tr data-method-admin-id="${esc(m.id)}"${rowClasses?` class="${rowClasses}"`:''}>
         <td class="mono" style="font-size:11px">${esc(m.id)}</td>
-        <td><input type="text" class="admin-input" data-method-admin-field="name" value="${esc(m.name||'')}"></td>
-        <td>
-          <select class="admin-input" data-method-admin-field="freq_years">
-            ${METHOD_FREQ_VALUES.map(v=>`<option value="${v===null?'':v}" ${(m.freq_years===v||(v===null&&m.freq_years==null))?'selected':''}>${v===null?'- (none)':v+' yr'}</option>`).join("")}
-          </select>
-        </td>
-        <td>
-          <select class="admin-input" data-method-admin-field="reeval_type">
-            <option value="" ${!m.reeval_type?'selected':''}>—</option>
-            ${METHOD_EVAL_TYPE_VALUES.map(v=>`<option value="${v}" ${m.reeval_type===v?'selected':''}>${v}</option>`).join("")}
-          </select>
-        </td>
-        <td><input type="text" class="admin-input" data-method-admin-field="remarks" value="${esc(m.remarks||'')}" style="width:130px"></td>
+        <td>${nameCell}</td>
+        <td>${freqCell}</td>
+        <td>${typeCell}</td>
+        <td>${remarksCell}</td>
         <td>${active ? '<span class="flag-chip ontrack">Active</span>' : '<span class="flag-chip none">Inactive</span>'}</td>
-        <td><button class="btn small" data-method-admin-toggle="${esc(m.id)}" data-method-admin-active="${active?'true':'false'}">${active?'Deactivate':'Reactivate'}</button></td>
+        <td style="display:flex;gap:4px;flex-wrap:wrap">${actionsCell}</td>
       </tr>`;
     }).join("");
     return `
@@ -2632,13 +2748,16 @@
       <section class="panel">
         <div class="panel-head">
           <h2>Manage test methods</h2>
-          <div class="meta">${Object.keys(STATE.methods).length} methods loaded from CL-D-1000-0010 Rev.08 &nbsp;·&nbsp; edits save automatically</div>
+          <div class="meta">${Object.keys(STATE.methods).length} methods loaded from CL-D-1000-0010 Rev.08 &nbsp;·&nbsp; click Edit to change a row, then Save (or Cancel) — nothing changes until you save</div>
         </div>
         <div class="people-toolbar">
           <input type="text" id="methodsAdminSearch" placeholder="Search doc no. or name" value="${esc(methodsAdminSearch)}" style="width:260px">
           <span class="hint">Frequency, re-evaluation type, remarks, and active/inactive apply to every person assigned this method. Deactivating a method hides it from "Assigned only" views but keeps everyone's history.</span>
+          <button class="btn" id="openMethodsImport" title="Read a new revision of CL-D-1000-0010 (the Competency evaluation list for testing method) and review what changed before applying anything — new methods, changed frequency/type/remarks, and methods no longer in the file.">Import method list (CL-D-1000-0010)</button>
+          <input type="file" id="methodsImportFile" accept=".xlsx,.xls" style="display:none">
           <button class="btn primary" id="toggleMethodsAdminAdd">${methodsAdminAddOpen?'Close':'+ Add custom method'}</button>
         </div>
+        ${methodsImportError ? `<div class="hint" style="padding:8px 12px;margin:0 0 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2, rgba(0,0,0,.03));color:#b91c1c">${esc(methodsImportError)}</div>` : ""}
         ${methodsAdminAddOpen ? `<div class="admin-add-form open">
           <div class="field"><label>Doc. No.</label><input type="text" id="newMethodId" placeholder="e.g. CL-T-9000-0001" style="width:170px"></div>
           <div class="field" style="min-width:260px;flex:1"><label>Name</label><input type="text" id="newMethodName" placeholder="Test method name"></div>
@@ -2653,6 +2772,67 @@
           <tbody>${bodyRows || `<tr><td colspan="7" class="empty-state">No matches.</td></tr>`}</tbody>
         </table></div>
       </section>
+    `;
+  }
+  function renderMethodsImportReviewView(){
+    const r = methodsImportReview;
+    const isExcluded = (k)=>r.excluded.has(k);
+    const includedCount = r.added.filter(a=>!isExcluded('added|'+a.id)).length
+      + r.changed.filter(c=>!isExcluded('changed|'+c.id)).length
+      + r.obsolete.filter(o=>!isExcluded('obsolete|'+o.id)).length;
+    const addedRows = r.added.map(a=>{
+      const key = 'added|'+a.id;
+      return `<tr class="${isExcluded(key)?'row-inactive':''}">
+        <td><input type="checkbox" data-methods-review-toggle="${esc(key)}" ${isExcluded(key)?'':'checked'}></td>
+        <td class="mono" style="font-size:11px">${esc(a.id)}</td>
+        <td>${esc(truncate(a.name,70))}</td>
+        <td>${a.freq_years==null?'- (none)':a.freq_years+' yr'}</td>
+        <td>${esc(a.reeval_type||'—')}</td>
+        <td>${esc(truncate(a.remarks,40))}</td>
+      </tr>`;
+    }).join("");
+    const changedRows = r.changed.map(c=>{
+      const key = 'changed|'+c.id;
+      const diffText = Object.keys(c.fieldDiffs).map(f=>`${f}: "${esc(c.fieldDiffs[f].from==null?'—':c.fieldDiffs[f].from)}" → "${esc(c.fieldDiffs[f].to==null?'—':c.fieldDiffs[f].to)}"`).join("; ");
+      return `<tr class="${isExcluded(key)?'row-inactive':''}">
+        <td><input type="checkbox" data-methods-review-toggle="${esc(key)}" ${isExcluded(key)?'':'checked'}></td>
+        <td class="mono" style="font-size:11px">${esc(c.id)}</td>
+        <td colspan="4">${esc(truncate(c.name,55))}<div class="hint" style="margin-top:2px">${diffText}</div></td>
+      </tr>`;
+    }).join("");
+    const obsoleteRows = r.obsolete.map(o=>{
+      const key = 'obsolete|'+o.id;
+      return `<tr class="${isExcluded(key)?'row-inactive':''}">
+        <td><input type="checkbox" data-methods-review-toggle="${esc(key)}" ${isExcluded(key)?'':'checked'}></td>
+        <td class="mono" style="font-size:11px">${esc(o.id)}</td>
+        <td colspan="4">${esc(truncate(o.name,70))}<div class="hint" style="margin-top:2px">Not found in the new file — will be Deactivated (kept on record, no history touched) unless unchecked.</div></td>
+      </tr>`;
+    }).join("");
+    const hasAny = r.added.length || r.changed.length || r.obsolete.length;
+    return `
+      <div class="backbar"><button class="link" id="cancelMethodsImportReview">&larr; Cancel, don't apply anything</button></div>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Review method list — "${esc(r.filename)}"</h2>
+          <div class="meta">${r.added.length} new &nbsp;·&nbsp; ${r.changed.length} changed &nbsp;·&nbsp; ${r.obsolete.length} possibly obsolete &nbsp;·&nbsp; ${includedCount} selected to apply</div>
+        </div>
+        <div class="people-toolbar">
+          <span class="hint">Nothing is saved yet. Uncheck anything you don't want applied, then click Apply. Classroom/training-type columns from the file aren't shown here — they aren't used anywhere else in this app, only Name, Frequency, Re-eval type and Remarks are compared.</span>
+        </div>
+        ${!hasAny ? `<div class="empty-state">No differences found — the method list already matches what's on record.</div>` : ""}
+      </section>
+      ${hasAny ? `<section class="panel">
+        <div class="gantt-scroll"><table class="people admin-table">
+          ${r.added.length?`<thead><tr><th></th><th>Doc No.</th><th>Name</th><th>Frequency</th><th>Re-eval type</th><th>Remarks</th></tr></thead><tbody><tr class="admin-divider"><td colspan="6">New</td></tr>${addedRows}</tbody>`:""}
+          ${r.changed.length?`<tbody><tr class="admin-divider"><td colspan="6">Changed</td></tr>${changedRows}</tbody>`:""}
+          ${r.obsolete.length?`<tbody><tr class="admin-divider"><td colspan="6">Possibly obsolete</td></tr>${obsoleteRows}</tbody>`:""}
+        </table></div>
+      </section>` : ""}
+      ${hasAny ? `<div class="admin-pending-bar">
+        <span class="admin-pending-count">${includedCount} change${includedCount===1?'':'s'} selected</span>
+        <button class="btn primary" id="applyMethodsImportBtn" ${includedCount===0?'disabled':''}>Apply ${includedCount} change${includedCount===1?'':'s'}</button>
+        <button class="btn" id="cancelMethodsImportReview2">Cancel</button>
+      </div>` : ""}
     `;
   }
 
@@ -3509,14 +3689,16 @@
       : view==="admin" ? "Manage Training Courses"
       : view==="methods-admin" ? "Manage Test Methods"
       : view==="plan-import-review" ? "Review Plan Revision"
+      : view==="methods-import-review" ? "Review Method List"
       : "Olefins Section — Onboarding & Qualification";
     document.getElementById("pageSubtitle").textContent = view==="person"
       ? "Source: CL-D-1000-0001 Functional Training Plan for Olefins (Rev 1.1)"
       : view==="admin" ? "Add, edit, or retire courses — shared across positions where the same course applies, with a dated, scoped effective date for each change"
       : view==="methods-admin" ? "Source: CL-D-1000-0010 Competency evaluation list for testing method (Rev.08)"
       : view==="plan-import-review" ? "Nothing is saved until you click Apply below"
+      : view==="methods-import-review" ? "Nothing is saved until you click Apply below"
       : "Section-wide onboarding dashboard — Section Manager, Supervisor (SS), Lead/Senior Engineer, and Gas/Oil/Utility Analysts";
-    document.getElementById("root").innerHTML = view==="person" ? renderPersonView() : view==="admin" ? renderAdminView() : view==="methods-admin" ? renderMethodsAdminView() : view==="plan-import-review" ? renderPlanImportReviewView() : renderDashboard();
+    document.getElementById("root").innerHTML = view==="person" ? renderPersonView() : view==="admin" ? renderAdminView() : view==="methods-admin" ? renderMethodsAdminView() : view==="plan-import-review" ? renderPlanImportReviewView() : view==="methods-import-review" ? renderMethodsImportReviewView() : renderDashboard();
     document.getElementById("footNote").innerHTML = footNote();
     attachHandlers();
   }
@@ -4065,27 +4247,141 @@
         paint();
       });
 
+      // v3.22 — plan-revision-style import for CL-D-1000-0010: read the file, build the diff, hand off
+      // to the review screen. Reading/parsing never writes to STATE — only Apply on that screen does.
+      const openMethodsImportBtn = document.getElementById("openMethodsImport");
+      const methodsImportFileInput = document.getElementById("methodsImportFile");
+      if(openMethodsImportBtn && methodsImportFileInput) openMethodsImportBtn.addEventListener("click", ()=>{ methodsImportFileInput.click(); });
+      if(methodsImportFileInput) methodsImportFileInput.addEventListener("change", ()=>{
+        const file = methodsImportFileInput.files && methodsImportFileInput.files[0];
+        methodsImportFileInput.value = "";
+        if(!file) return;
+        const reader = new FileReader();
+        reader.onload = (e)=>{
+          try{
+            const data = new Uint8Array(e.target.result);
+            const wb = XLSX.read(data, { type:"array" });
+            const { items } = parseMethodsCatalogWorkbook(wb);
+            if(items.length===0){
+              methodsImportError = `Could not find a "Document No. / Test Method Name" header row in "${file.name}" — expected the CL-D-1000-0010 Competency evaluation list layout.`;
+              paint();
+              return;
+            }
+            const { added, changed, obsolete } = buildMethodsCatalogDiff(items);
+            methodsImportError = "";
+            methodsImportReview = { filename: file.name, added, changed, obsolete, excluded: new Set() };
+            view = "methods-import-review";
+            paint();
+          } catch(err){
+            methodsImportError = `Could not read "${file.name}": ${err && err.message ? err.message : err}`;
+            paint();
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      });
+
+      // v3.22 — a row's fields are read-only until "Edit" unlocks it; edits accumulate in
+      // methodsAdminDraft (a plain copy) and only reach STATE.methods — and the database — on "Save".
+      root.querySelectorAll("[data-method-admin-edit-open]").forEach(btn=>{
+        btn.addEventListener("click", ()=>{
+          if(btn.disabled) return;
+          const id = btn.getAttribute("data-method-admin-edit-open");
+          const m = STATE.methods[id]; if(!m) return;
+          methodsAdminEditId = id;
+          methodsAdminDraft = Object.assign({}, m);
+          paint();
+        });
+      });
+      root.querySelectorAll("[data-method-admin-edit-cancel]").forEach(btn=>{
+        btn.addEventListener("click", ()=>{
+          methodsAdminEditId = null;
+          methodsAdminDraft = null;
+          paint();
+        });
+      });
+      root.querySelectorAll("[data-method-admin-edit-save]").forEach(btn=>{
+        btn.addEventListener("click", ()=>{
+          const id = btn.getAttribute("data-method-admin-edit-save");
+          const m = STATE.methods[id];
+          if(m && methodsAdminDraft){
+            m.name = methodsAdminDraft.name;
+            m.freq_years = methodsAdminDraft.freq_years;
+            m.reeval_type = methodsAdminDraft.reeval_type;
+            m.remarks = methodsAdminDraft.remarks;
+            scheduleSave();
+          }
+          methodsAdminEditId = null;
+          methodsAdminDraft = null;
+          paint();
+        });
+      });
       root.querySelectorAll("tr[data-method-admin-id]").forEach(tr=>{
         const id = tr.getAttribute("data-method-admin-id");
-        tr.querySelectorAll("[data-method-admin-field]").forEach(el=>{
+        if(methodsAdminEditId!==id) return; // only the unlocked row's fields are live inputs at all
+        tr.querySelectorAll("[data-method-edit-field]").forEach(el=>{
           el.addEventListener("change", ()=>{
-            const field = el.getAttribute("data-method-admin-field");
-            const m = STATE.methods[id]; if(!m) return;
-            if(field==="freq_years") m.freq_years = el.value===""? null : Number(el.value);
-            else if(field==="reeval_type") m.reeval_type = el.value || null;
-            else m[field] = el.value;
-            scheduleSave();
+            if(!methodsAdminDraft) return;
+            const field = el.getAttribute("data-method-edit-field");
+            if(field==="freq_years") methodsAdminDraft.freq_years = el.value===""? null : Number(el.value);
+            else if(field==="reeval_type") methodsAdminDraft.reeval_type = el.value || null;
+            else methodsAdminDraft[field] = el.value;
+            // Deliberately no paint() here — nothing else on screen needs to reflect a still-in-progress
+            // edit, and re-rendering the whole row on every single field's change would wipe out
+            // whatever's typed-but-not-yet-blurred in this row's OTHER fields (each one only updates the
+            // draft when ITS OWN change fires). The native input/select already shows what was typed;
+            // Save/Cancel repaint when the row actually needs to change.
           });
         });
       });
       root.querySelectorAll("[data-method-admin-toggle]").forEach(btn=>{
         btn.addEventListener("click", ()=>{
+          if(btn.disabled) return;
           const id = btn.getAttribute("data-method-admin-toggle");
           const m = STATE.methods[id]; if(!m) return;
           m.active = !(btn.getAttribute("data-method-admin-active")==="true");
           scheduleSave();
           paint();
         });
+      });
+    } else if(view==="methods-import-review"){
+      const cancelMethodsReviewBtns = [document.getElementById("cancelMethodsImportReview"), document.getElementById("cancelMethodsImportReview2")];
+      cancelMethodsReviewBtns.forEach(btn=>{
+        if(btn) btn.addEventListener("click", ()=>{ methodsImportReview = null; view = "methods-admin"; paint(); });
+      });
+
+      root.querySelectorAll("[data-methods-review-toggle]").forEach(chk=>{
+        chk.addEventListener("change", ()=>{
+          const key = chk.getAttribute("data-methods-review-toggle");
+          if(chk.checked) methodsImportReview.excluded.delete(key); else methodsImportReview.excluded.add(key);
+          paint();
+        });
+      });
+
+      const applyMethodsImportBtn = document.getElementById("applyMethodsImportBtn");
+      if(applyMethodsImportBtn) applyMethodsImportBtn.addEventListener("click", ()=>{
+        const r = methodsImportReview;
+        if(!r) return;
+        const isExcluded = (k)=>r.excluded.has(k);
+        r.added.forEach(a=>{
+          if(isExcluded('added|'+a.id)) return;
+          const idNorm = a.id.toLowerCase();
+          if(Object.keys(STATE.methods).find(k=>k.toLowerCase()===idNorm)) return; // race-safety: already exists
+          STATE.methods[a.id] = { id: a.id, name: a.name, classroom: a.classroom, training_type: a.training_type, freq_years: a.freq_years, reeval_type: a.reeval_type, remarks: a.remarks||"", active: true };
+        });
+        r.changed.forEach(c=>{
+          if(isExcluded('changed|'+c.id)) return;
+          const m = STATE.methods[c.id]; if(!m) return;
+          Object.keys(c.fieldDiffs).forEach(f=>{ m[f] = c.fieldDiffs[f].to; });
+        });
+        r.obsolete.forEach(o=>{
+          if(isExcluded('obsolete|'+o.id)) return;
+          const m = STATE.methods[o.id]; if(!m) return;
+          m.active = false;
+        });
+        scheduleSave();
+        methodsImportReview = null;
+        view = "methods-admin";
+        paint();
       });
     } else {
       const backBtn = document.getElementById("backToDash");
