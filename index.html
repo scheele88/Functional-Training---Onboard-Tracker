@@ -945,7 +945,15 @@
         if(normCode(existing.code)!==normCode(imp.labCode)) fieldDiffs.code = { from: existing.code, to: imp.labCode };
         if((existing.topic||"").trim()!==imp.topic.trim()) fieldDiffs.topic = { from: existing.topic, to: imp.topic };
         if(Number(existing.hours)!==Number(imp.hours) && imp.hours>0) fieldDiffs.hours = { from: existing.hours, to: imp.hours };
-        if((existing.trainer||"").trim()!==(imp.trainer||"").trim() && imp.trainer) fieldDiffs.trainer = { from: existing.trainer, to: imp.trainer };
+        // Trainer (column G) is deliberately NOT diffed here. It's stored as one shared value per
+        // course code, not per curriculum — but the same document/course code can legitimately list a
+        // different trainer on each position's own sheet in the source plan (per the user: "the same
+        // training course has different trainer for each position"). Comparing it would flag a
+        // "change" on essentially every re-import, forever, even when nothing the admin cares about
+        // moved — the last curriculum applied would keep overwriting the shared value, permanently
+        // disagreeing with every other curriculum's own sheet. Trainer has no role elsewhere in the
+        // tracker's logic (scheduling, warnings), so it's left out of this diff; it's still editable
+        // by hand per course via the row's Edit panel for anyone who wants one recorded.
         if((existing.evalMethod||"").trim()!==(imp.evalMethod||"").trim() && imp.evalMethod) fieldDiffs.evalMethod = { from: existing.evalMethod, to: imp.evalMethod };
         if(Object.keys(fieldDiffs).length) changed.push({ doc, id: existing.id, code: existing.code, topic: existing.topic, custom: existing.custom, fieldDiffs });
       });

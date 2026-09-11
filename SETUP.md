@@ -19,7 +19,7 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.20) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
+  (v3.21) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
   "Export Report", **"Test Methods — Competency & Re-evaluation Tracking (v3.6)"**, **"Re-evaluation
   tab, editable dates & Excel import (new, v3.7)"**, **"Test methods now scope to your current
   position, and Excel import now updates the Planner/Schedule tab too (v3.8)"**, **"Test-method
@@ -37,8 +37,9 @@ all. This version saves every change straight to a shared database, so:
   own curriculum, and the tick/assign checkbox is gone (v3.17)"**, **"Methods you've already
   completed under a previous position now stay visible, just marked inactive (v3.18)"**,
   **"Excel import now matches document courses by their real Document No., not just the Lab-code
-  (v3.19)"**, and **"Manage courses" now has a plan-revision import and a per-row Edit button,
-  including applies-to editing (v3.20)"** below for what's new.
+  (v3.19)"**, **"Manage courses" now has a plan-revision import and a per-row Edit button,
+  including applies-to editing (v3.20)"**, and **"Plan-revision import no longer re-flags Trainer as
+  changed on every re-import (v3.21)"** below for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -806,6 +807,36 @@ Both features build entirely on the dated/scoped course-revision mechanism this 
 same one behind every inline course edit since early on) — nothing new to migrate, and no schema
 change, so there's no new `migration_*.sql` file for this round.
 
+## Plan-revision import no longer re-flags Trainer as changed on every re-import (v3.21)
+
+Right after trying v3.20's plan-revision import, you reported: *"Just 1 thing remains for this import
+function: I changed the Trainer column (column G in the excel file), first time it appears on the
+confirmation session to ask if I want to change or not, this was totally ok, but times after, I
+uploaded other file, this G column stays unchanged but it still asked me for the confirmation like
+this? More info: this info from column G currently has no role in the tracker, maybe in many cases,
+the same training course has different trainer for each position, so it's get confusing?"*
+
+You'd correctly spotted a real bug, and your own explanation of it is exactly right. **Trainer is
+stored as one shared value per course code, not one value per curriculum** — the same as Topic,
+Hours, and Evaluation method have always worked in this app (a course shared across positions, like
+`CL-M-1000-0001`, has always been "one record" everywhere it's used). But your source plan document
+can legitimately list a *different* trainer name on each position's own sheet for that same course.
+So the first import you did picked up whichever curriculum's sheet happened to apply last and stored
+that as the one shared trainer value — which then permanently disagreed with every *other*
+curriculum's own sheet, so literally any later import (even the exact same file, unchanged) kept
+finding a "difference" for that course's trainer, on and on, for a value that never actually needed
+fixing.
+
+**Trainer is no longer compared during plan-revision import at all.** The review screen's "Changed"
+section now only ever flags a genuine Topic, Hours, or Evaluation-method difference (plus the
+informational-only Lab-code note from v3.20) — a course that differs *only* in Trainer no longer shows
+up as changed, and won't keep re-appearing on every future import either. This matches what you said:
+since Trainer plays no role anywhere else in the tracker's logic (no scheduling, no warning depends on
+it), it isn't worth a confirmation prompt that can't actually be satisfied consistently across
+curricula. Trainer is untouched everywhere else — still shown and still hand-editable per course via
+each row's Edit panel (v3.20) for anyone who wants one recorded there; this change only affects what
+the plan-revision import compares and applies.
+
 ## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
 This is the same page as everything above — I originally built this as a separate app and separate
@@ -1077,15 +1108,23 @@ screen showing only the SM curriculum (Gas, imported byte-for-byte unchanged, pr
 never appears); the changed row's Lab-code diff is shown but labeled informational-only; unchecking
 one of the four new courses before Apply correctly excludes only that one; and after Apply, the
 Lab-code on record for `CL-M-1000-0001` is confirmed unchanged (never auto-applied) while its hours
-and trainer changes are, `CL-P-1000-0002` is confirmed still present but now inactive, all three
-included new courses appear with the correct auto-classified Phase, the excluded one does not appear
-at all, and the Gas tab (81 courses) is confirmed completely unaffected by the SM-side import,
-byte-for-byte. The full pre-existing suite (28 files, all rounds through v3.19) was re-run afterward
-and confirmed to still pass — one older, position-rotation test file (`_pw_poschange.js`) turned out
-to have a stale mock database missing the `onb_methods` table (predating that table's introduction,
-unrelated to this round's changes), which surfaced as the mock's initial data fetch failing; fixed
-the fixture and confirmed the actual rotation logic it tests is unaffected. `node --check` clean
-throughout.
+change is, `CL-P-1000-0002` is confirmed still present but now inactive, all three included new
+courses appear with the correct auto-classified Phase, the excluded one does not appear at all, and
+the Gas tab (81 courses) is confirmed completely unaffected by the SM-side import, byte-for-byte. The
+full pre-existing suite (28 files, all rounds through v3.19) was re-run afterward and confirmed to
+still pass — one older, position-rotation test file (`_pw_poschange.js`) turned out to have a stale
+mock database missing the `onb_methods` table (predating that table's introduction, unrelated to this
+round's changes), which surfaced as the mock's initial data fetch failing; fixed the fixture and
+confirmed the actual rotation logic it tests is unaffected. `node --check` clean throughout; and new
+for v3.21 — reproduced your report directly: the same `CL-M-1000-0001` change now also carries a
+trainer-only difference (nothing else touched), and it no longer shows up on the review screen at all
+— not under Changed, not anywhere — confirming a trainer-only difference is never flagged again, on
+this import or any later one; the deliberate hours-change case above continues to show correctly as
+Changed on its own; and after Apply, the on-record trainer for `CL-M-1000-0001` is confirmed
+completely untouched (still whatever it was before the import, not the file's value) while the hours
+change still applies as before, confirming Trainer editing itself (via the Edit panel) is unaffected —
+only the plan-import comparison and apply path changed. The full pre-existing suite (29 files) was
+re-run afterward and confirmed to still pass. `node --check` clean throughout.
 However, this sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
@@ -1147,7 +1186,10 @@ Apply, read through every section on the review screen carefully (this is exactl
 screen and not an immediate apply): check that new courses landed in the Phase you'd expect, that
 anything marked "possibly obsolete" is actually meant to be retired and not just a Lab-code rename
 that should instead be a manual Edit, and that changed items' diffs look right — then apply and
-spot-check a few of the affected people's own pages.
+spot-check a few of the affected people's own pages. For v3.21, this is the same "Import plan
+revision" flow — just confirm that a course whose only difference from what's on record is its
+Trainer name no longer shows up in the Changed section at all (it used to, every time, even for a
+file you'd already imported before).
 
 ## Everyday use
 
