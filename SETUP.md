@@ -19,7 +19,7 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.18) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
+  (v3.19) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
   "Export Report", **"Test Methods — Competency & Re-evaluation Tracking (v3.6)"**, **"Re-evaluation
   tab, editable dates & Excel import (new, v3.7)"**, **"Test methods now scope to your current
   position, and Excel import now updates the Planner/Schedule tab too (v3.8)"**, **"Test-method
@@ -34,9 +34,10 @@ all. This version saves every change straight to a shared database, so:
   **"All courses now get a completion-record tab too, for every position including Analysts
   (v3.15)"**, **"Courses and Test Methods are now one merged table, and a genuine duplication
   is now eliminated (v3.16)"**, **"Test Methods now show only what's actually in a position's
-  own curriculum, and the tick/assign checkbox is gone (v3.17)"**, and **"Methods you've already
-  completed under a previous position now stay visible, just marked inactive (v3.18)"** below for
-  what's new.
+  own curriculum, and the tick/assign checkbox is gone (v3.17)"**, **"Methods you've already
+  completed under a previous position now stay visible, just marked inactive (v3.18)"**, and
+  **"Excel import now matches document courses by their real Document No., not just the Lab-code
+  (v3.19)"** below for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -700,6 +701,53 @@ curriculum" concept the way test methods do (a course row only ever shows if it'
 curriculum list to begin with) — so this round's change is scoped to Test Methods, which is where the
 gap actually was.
 
+## Excel import now matches document courses by their real Document No., not just the Lab-code (v3.19)
+
+You reported: *"The Course code (in this example Lab-04-03-003) is not correct for some actual courses
+(for example CL-P-1000-0023 here respectively and others...), that's why the complete date is leave not
+updated? Maybe something wrong when reading the file imported from excel? Check carefully for all and
+fix."*
+
+You were right, and it's a real bug in the Excel import, not a data-entry mistake on either side.
+Confirmed directly against your files: the master curriculum plan document (which this app's course
+list is built from) genuinely says `Lab-04-03-003` for `CL-P-1000-0023` — but the real HR/LIMS
+training-report export you attached uses `Lab-04-03-001` for that exact same course. Two different
+systems, two different Lab-code numbers, same real course. The import only ever matched a document-type
+course (Chemicals/Glassware/Spare-parts-style courses — anything that isn't a Test Method (OJT)) by its
+Course-column Lab-code, so whenever the two systems' Lab-codes disagreed, the row was silently skipped
+and the Completed date on the Planner/Schedule tab never got touched — no error, no warning, it just
+quietly didn't happen.
+
+**The fix generalizes something this app already does correctly for test methods, since v3.9: match by
+Document No. instead of Lab-code.** A course's own topic already carries its real Document No. at the
+front (that's what shows in the course name on screen) — `CL-P-1000-0023`, `CL-W-1000-99-0010`, etc. —
+and a real export's Description column carries that same Document No. by itself. Matching on that
+sidesteps the Lab-code disagreement entirely, because the Document No. doesn't have the numbering-drift
+problem the Lab-code does.
+
+**1. Document-No. matching now covers every document course type**, not just CL-T test methods —
+CL-P, CL-M, CL-W, CL-D and HS-K courses (Chemicals, Glassware, Spare parts, Gas/Oil/Utility-owned
+document courses, etc.) are all covered now. This was the main fix, and it's the one that resolves the
+`CL-P-1000-0023` case you flagged directly.
+
+**2. The Course-column Lab-code match is more forgiving now too**, as a second, belt-and-suspenders
+improvement: it used to require the Lab-code to be exactly digit-for-digit identical, including leading
+zeros (`Lab-01-03-012`), and a real export using fewer digits (`Lab-01-03-12`) wasn't even recognized as
+a course-code cell at all — the whole row was skipped before the matching logic ever ran. It now
+tolerates that kind of digit-width difference.
+
+**3. A row that matches via Document No. no longer shows a confusing "unmatched" warning** just because
+its Lab-code alone didn't line up — the import summary only flags a code as unmatched when nothing on
+that row matched through any path.
+
+**What this doesn't change:** the Re-evaluation record for test methods themselves (the CL-T
+competency/evaluation history) was never affected by this bug — that path already matched correctly.
+This fix is specifically about the Planner/Schedule tab's Completed date for document-type courses.
+
+**Since the underlying cause was genuine Lab-code divergence between two source systems, not a typo on
+either side, it's worth re-running your last few Excel imports** (the same files, no changes needed) so
+any Completed dates that were silently missed the first time get picked up now.
+
 ## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
 This is the same page as everything above — I originally built this as a separate app and separate
@@ -935,7 +983,22 @@ a curriculum-irrelevant method (`_pw_v39_curriculum.js`, `_pw_v310_polyolefins_m
 `_pw_v314_nonanalyst_completion_record.js`) had their assertions updated from "correctly hidden" to
 "correctly shown, marked not required" — not because anything regressed, but because those fixtures
 exercise exactly the display behavior this round intentionally restored; the rest of the full
-pre-existing suite was re-run unchanged and confirmed to still pass. `node --check` clean throughout.
+pre-existing suite was re-run unchanged and confirmed to still pass; and new for v3.19 — built directly
+against your bug report: a mocked Section Manager import row for `CL-P-1000-0023` carrying a
+deliberately-wrong Course-column Lab-code (mirroring your real screenshots, where the plan document's
+`Lab-04-03-003` and the real export's `Lab-04-03-001` disagree for the same course) now correctly gets
+its Completed date written to the Planner/Schedule tab anyway, matched by Description-column Document
+No. instead; a row for `CL-P-1000-0022` with *no* Course-column value at all (only a Description-column
+Document No.) — previously silently skipped in full, before ever reaching the match logic — now
+correctly updates too; a row for `CL-W-1000-99-0010` (a Document No. with an extra dash-segment beyond
+the CL-T-style 2-segment shape) also correctly updates, confirming the fix isn't accidentally narrowed
+to 2-segment codes; the import summary correctly stops flagging the deliberately-wrong Lab-code as
+"unmatched" once the row matched through the Document No. path instead; and, checked separately, the
+loosened Course-column regex plus its new leading-zero-tolerant comparison correctly matches
+`Lab-01-03-12` against a stored `Lab-01-03-012`-style code on their own, independent of the Document-No.
+path. The full pre-existing suite (v3.9–v3.18 included) was re-run afterward and confirmed to still
+pass, with no fixture changes needed this round — the fix only adds new matching paths, it doesn't
+change any existing one's behavior. `node --check` clean throughout.
 However, this sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
@@ -983,7 +1046,12 @@ long-tenured examples) and confirm a method they completed under their earlier p
 marked "(not required for current position)," no due date, no status chip, not selectable under
 Overdue/Due soon — and that the new "Not required for current position" option in the status-filter
 dropdown isolates exactly those rows; then check a newer hire with no rotation history to confirm they
-see no such tag or count anywhere.
+see no such tag or count anywhere. For v3.19, re-run one of your real Excel import files (the same one
+from the bug report is ideal) against the affected Section Manager and confirm `CL-P-1000-0023` (and
+any other course whose Completed date stayed blank before) now picks up its date on the Planner/
+Schedule tab; then check the import result banner for any remaining "Course code(s) not found"
+entries — those are genuinely not in that person's current curriculum (company-wide training, or a
+position they've since rotated out of), not this bug.
 
 ## Everyday use
 

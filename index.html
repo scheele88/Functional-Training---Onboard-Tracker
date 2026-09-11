@@ -2827,12 +2827,22 @@
   // existing curriculum code outright; the rest are company-wide training the onboarding curriculum
   // doesn't track, e.g. HR/safety courses, and are simply left unmatched like an unrecognized Document
   // No. already is).
+  // v3.19 — a real export's Lab-code can differ in digit width from the master plan document's (e.g.
+  // "Lab-01-03-12" vs. COURSE_DATA's "Lab-01-03-012" for the very same course) — normCode() alone
+  // doesn't account for that, so exact-string matching missed it. normLabCode() strips leading zeros
+  // from each numeric dash-segment before comparing, so both spellings line up; tried as a fallback
+  // only after the plain normCode() comparison, which stays the primary/faster path.
+  function normLabCode(code){
+    return String(code||"").trim().toLowerCase()
+      .split("-").map(seg=>/^\d+$/.test(seg) ? String(parseInt(seg,10)) : seg).join("-");
+  }
   function findCourseByCurriculumCode(person, courseCode){
     const posDef = POSITIONS[person.positionKey];
     if(!posDef) return null;
     const norm = normCode(courseCode);
+    const normLab = normLabCode(courseCode);
     const all = adminCourseRows(posDef.courseKey, positionRefDate(person));
-    return all.find(it=>normCode(it.code)===norm) || null;
+    return all.find(it=>normCode(it.code)===norm) || all.find(it=>normLabCode(it.code)===normLab) || null;
   }
   // v3.9 — the SAME Description-column CL-T Document No. already used to update the Re-evaluation
   // record (applyMethodsImportRow) also lines up with a curriculum course directly, for a "Test Method
@@ -2851,6 +2861,35 @@
       const m = (it.topic||"").match(/CL-T-\d{4}-\d{4}/);
       return m && m[0].toLowerCase()===norm;
     }) || null;
+  }
+  // v3.19 — per the user's bug report: some real Completed dates weren't landing on the Planner/
+  // Schedule tab at all. Root cause was the Course-column (Lab-code) match above being the ONLY path
+  // for a document-type course (CL-P/CL-M/CL-W/CL-D/HS-K — anything that isn't a "Test Method (OJT)"
+  // CL-T course), and Lab-codes can genuinely diverge between the master plan document COURSE_DATA was
+  // built from and the real HR/LIMS export for the exact same course — confirmed for real:
+  // CL-P-1000-0023 is "Lab-04-03-003" in the plan document (and so in COURSE_DATA) but "Lab-04-03-001"
+  // in a real training-report export. v3.9 already solved this exact class of problem for CL-T test
+  // methods by matching on the Description-column Document No. instead of the Course-column Lab-code —
+  // this generalizes that same fix to every document course type, not just CL-T. A course's own topic
+  // reliably embeds its real Document No. at the very start (the same thing extractLeadingDocCode()
+  // extracts for the "Add course" uniqueness check), and a real export's Description column reliably
+  // carries that same Document No. by itself, so matching on it sidesteps Lab-code divergence entirely.
+  function extractEmbeddedDocCode(text){
+    // Anchored on whitespace/underscore/string-boundaries rather than \b: a topic embeds its code as
+    // e.g. "CL-W-1000-99-0010_Methods Validation..." — the underscore is a WORD character in regex, so
+    // a trailing \b right after the code's last digit fails there (no \w/\W transition), silently
+    // truncating a multi-segment code like CL-W's to "CL-W-1000-99". This anchoring treats underscore
+    // as a valid delimiter alongside whitespace and start/end of string, so the full code is captured.
+    const m = String(text||"").match(/(?:^|[\s_])(CL-[A-Za-z]+-\d{3,4}(?:-\d{2,4}){1,3}|HS-K-\d{3,4}-\d{3,4})(?=[\s_]|$)/i);
+    return m ? m[1].toUpperCase() : null;
+  }
+  function findCourseByDocCode(person, docCode){
+    const posDef = POSITIONS[person.positionKey];
+    if(!posDef) return null;
+    const norm = String(docCode||"").trim().toUpperCase();
+    if(!norm) return null;
+    const all = adminCourseRows(posDef.courseKey, positionRefDate(person));
+    return all.find(it=>extractEmbeddedDocCode(it.topic)===norm) || null;
   }
   // Both lookups above are scoped to the person's CURRENT position's curriculum only (adminCourseRows,
   // including deactivated courses in case one was retired after they completed it) — a code that only
@@ -2895,9 +2934,20 @@
         // Lab-XX-XX-XXX cell (Course column) marks a curriculum-course row — a row can carry either
         // or both. The small Competency summary table (General/Functional) has neither and is
         // skipped naturally, same as any other row this file has that matches neither pattern.
+        // v3.19 — the Course-column regex used to require exactly 2-2-3 digits; a real export can use
+        // fewer digits per segment (confirmed real example: "Lab-01-03-12"), which the old, stricter
+        // regex didn't recognize as a course cell at all — for a document-type row (no CL-T docCell
+        // either) that meant the ENTIRE row was silently skipped before ever reaching the match/report
+        // logic below. Loosened to tolerate 1-3 digits per segment; normLabCode() in
+        // findCourseByCurriculumCode then handles the leading-zero difference at match time.
         const docCell = cells.find(c=>/^CL-T-\d{4}-\d{4}$/i.test(c));
-        const courseCell = cells.find(c=>/^Lab-\d{2}-\d{2}-\d{3}$/i.test(c));
-        if(!docCell && !courseCell) return;
+        const courseCell = cells.find(c=>/^Lab-\d{1,3}-\d{1,3}-\d{1,4}$/i.test(c));
+        // v3.19 — a Description-column cell for a non-CL-T document course (CL-P/CL-M/CL-W/CL-D/
+        // HS-K), matched by embedded Document No. via findCourseByDocCode below. Deliberately excludes
+        // CL-T so it never double-reports against the docCell/unmatchedMethods path above, which
+        // already owns CL-T end to end.
+        const genericDocCell = cells.find(c=>extractEmbeddedDocCode(c)===c.toUpperCase() && !/^CL-T-/i.test(c));
+        if(!docCell && !courseCell && !genericDocCell) return;
         result.rows++;
         if(!currentName) return; // no person context yet — can't attribute this row
         const dates = cells.map(parseImportDateCell).filter(Boolean);
@@ -2923,18 +2973,32 @@
             result.updated.push({ person: person.name, methodId, completeISO, retrainISO });
           }
         }
-        // A row can point at the SAME curriculum course through both the Course-column Lab-code and
-        // the Description-column CL-T code (a Test Method (OJT) course's "code" and its topic's
-        // embedded CL-T No. both resolve to it) — collect matches from both paths into one map keyed
-        // by course id so a single course is only marked Passed, and only counted, once per row.
+        // A row can point at the SAME curriculum course through more than one path at once — the
+        // Course-column Lab-code, the Description-column CL-T code (a Test Method (OJT) course's
+        // "code" and its topic's embedded CL-T No. both resolve to it), or (v3.19) a Description-
+        // column Document No. for a non-CL-T document course — collect matches from every path into
+        // one map keyed by course id so a single course is only marked Passed, and only counted, once
+        // per row. v3.19 — per the user's bug report, the Course-column Lab-code alone is unreliable
+        // (it can genuinely diverge from the real HR/LIMS export for the same course — confirmed for
+        // CL-P-1000-0023), so a Lab-code that fails to match is no longer reported as "unmatched"
+        // when another path on the same row already matched the course; it's only reported when NO
+        // path matched anything, so a real, successfully-imported row never shows a confusing warning.
         const matchedCourses = new Map();
+        const unmatchedCourseCandidates = [];
         if(courseCell){
           const c = findCourseByCurriculumCode(person, courseCell);
-          if(c) matchedCourses.set(c.id, c); else result.unmatchedCourses.add(courseCell);
+          if(c) matchedCourses.set(c.id, c); else unmatchedCourseCandidates.push(courseCell);
         }
         if(matchedMethodId){
           const c2 = findCourseByMethodCode(person, matchedMethodId);
           if(c2) matchedCourses.set(c2.id, c2);
+        }
+        if(genericDocCell){
+          const c3 = findCourseByDocCode(person, genericDocCell);
+          if(c3) matchedCourses.set(c3.id, c3); else unmatchedCourseCandidates.push(genericDocCell);
+        }
+        if(matchedCourses.size===0){
+          unmatchedCourseCandidates.forEach(x=>result.unmatchedCourses.add(x));
         }
         matchedCourses.forEach(c=>{
           markCourseImported(person, c, completeISO);
