@@ -7,6 +7,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.1/dist/pptxgen.bundle.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script src="config.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
@@ -493,12 +494,12 @@
   </div>
 </div>
 
-<!-- EXPORT REPORT (PPTX, 16:9) -->
+<!-- EXPORT REPORT (PPTX, 16:9 / Excel, .xlsx) -->
 <div id="exportReportModal" class="adm-gate" hidden>
   <div class="adm-gate-card" style="width:380px">
     <div class="adm-gate-icon">📊</div>
     <h3>Export Report</h3>
-    <p>Builds a 16:9 PowerPoint covering whichever sections you tick below, using the section's live data as of right now.</p>
+    <p>Builds a 16:9 PowerPoint and/or an Excel workbook covering the options below, using live data as of right now.</p>
     <label style="display:flex;align-items:center;gap:8px;margin:14px 0;text-align:left;font-size:14px;color:var(--ink)">
       <input type="checkbox" id="exportScopeOverall" checked style="width:16px;height:16px">
       Overall results — all active people, by position
@@ -511,13 +512,19 @@
       <input type="checkbox" id="exportScopeRotated" style="width:16px;height:16px">
       Rotated members — active people with a recorded position change
     </label>
+    <hr style="border:none;border-top:1px solid var(--border);margin:14px 0">
+    <label style="display:flex;align-items:center;gap:8px;margin:14px 0;text-align:left;font-size:14px;color:var(--ink)">
+      <input type="checkbox" id="exportFormatExcel" style="width:16px;height:16px">
+      Excel data export (.xlsx) — every active person's courses &amp; test methods, one row each; re-importable via "Import test results (Excel)"
+    </label>
     <div id="exportReportScopeNote" style="text-align:left;font-size:12.5px;color:var(--muted);margin:-4px 0 10px"></div>
     <div id="exportReportErr" class="adm-gate-err"></div>
     <div class="adm-gate-btns">
       <button class="btn-adm-gate-cancel" id="exportReportCancel">Cancel</button>
-      <button class="btn-adm-unlock" id="exportReportGenerate">Generate .pptx</button>
+      <button class="btn-adm-unlock" id="exportReportGenerate">Generate</button>
     </div>
   </div>
+</div>
 </div>
 
 
@@ -2059,7 +2066,154 @@
     const dateStamp = toISO(new Date());
     return pres.writeFile({ fileName:`Olefins-UT-Training-Report-${dateStamp}.pptx` });
   }
+// ---------- Export Report (Excel, .xlsx) ----------
+function excelPersonRows(person){
+  const items = courseData(person.positionKey, positionRefDate(person));
+  const methodToCourse = {};
+  items.forEach(it=>{ const mid = courseMethodId(it); if(mid) methodToCourse[mid] = it; });
+  const courseRows = items.filter(it=>!courseMethodId(it)).map(it=>{
+    const ist = itemState(person, it.id);
+    return {
+      course: String(it.code||"").replace(/\s*\(\*\)\s*$/,""),
+      description: extractLeadingDocCode(it.topic) || "",
+      completeISO: ist.actualDate || "",
+      retrainISO: "",
+    };
+  });
+  const posMethodCodes = curriculumMethodCodes(person.positionKey);
+  const methodRows = personMethodEntriesRaw(person, {includeUnassigned:true})
+    .filter(r=>posMethodCodes.has(r.id.toLowerCase()) || r.assigned)
+    .map(r=>{
+      const linkedCourse = methodToCourse[r.id] || null;
+      return {
+        course: linkedCourse ? String(linkedCourse.code||"").replace(/\s*\(\*\)\s*$/,"") : "",
+        description: r.id,
+        completeISO: r.status.lastDate || "",
+        retrainISO: r.status.nextDue || "",
+      };
+    });
+  return courseRows.concat(methodRows);
+}
+function excelDateCell(cell, iso){
+  if(!iso) return;
+  const d = parseISO(iso);
+  if(!d) return;
+  cell.value = d;
+  cell.numFmt = "dd/mm/yyyy";
+}
+async function buildAndDownloadExcelReport(){
+  if(typeof ExcelJS === "undefined") throw new Error("The Excel library didn't load — check your internet connection and try again.");
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Olefins Onboarding Tracker";
+  wb.created = new Date();
+  const active = Object.values(STATE.people).filter(isActive).slice().sort((a,b)=>{
+    const oa = POSITION_ORDER.indexOf(a.positionKey), ob = POSITION_ORDER.indexOf(b.positionKey);
+    if(oa!==ob) return oa-ob;
+    return (a.startDate||"").localeCompare(b.startDate||"");
+  });
 
+  const sum = wb.addWorksheet("Summary", { properties: { tabColor: { argb:"FF0D9488" } } });
+  sum.columns = [{width:30},{width:16},{width:20},{width:18}];
+  sum.mergeCells("A1:D1");
+  sum.getCell("A1").value = "Olefins & UT Analyst Section — Onboarding & Qualification Training Report";
+  sum.getCell("A1").font = { size:14, bold:true, color:{argb:"FFFFFFFF"} };
+  sum.getCell("A1").fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FF0B1F3A"} };
+  sum.getCell("A1").alignment = { vertical:"middle" };
+  sum.getRow(1).height = 28;
+  sum.mergeCells("A2:D2");
+  sum.getCell("A2").value = `Generated ${fmtDate(new Date())} · Progress basis: ${PROGRESS_SCOPES[progressScope].label}`;
+  sum.getCell("A2").font = { italic:true, color:{argb:"FF64748B"} };
+
+  const stats = active.map(p=>({ p, pr: personProgressScoped(p, progressScope) }));
+  const total = stats.length;
+  const overdueCount = stats.filter(s=>s.pr.overdue>0).length;
+  const avgPct = Math.round(stats.reduce((s,x)=>s+x.pr.pct,0)/(total||1));
+  let r = 4;
+  sum.getCell(`A${r}`).value = "Key figures"; sum.getCell(`A${r}`).font = { bold:true, size:12, color:{argb:"FF0B1F3A"} }; r++;
+  [["Active people",total], [`Avg. completion (${PROGRESS_SCOPES[progressScope].short})`, avgPct+"%"],
+   ["On track", total-overdueCount], ["Overdue", overdueCount]].forEach(([label,value])=>{
+    sum.getCell(`A${r}`).value = label; sum.getCell(`A${r}`).font = { color:{argb:"FF475569"} };
+    sum.getCell(`B${r}`).value = value; sum.getCell(`B${r}`).font = { bold:true, color:{argb:"FF0D9488"} };
+    r++;
+  });
+  r++;
+  sum.getCell(`A${r}`).value = "By position"; sum.getCell(`A${r}`).font = { bold:true, size:12, color:{argb:"FF0B1F3A"} }; r++;
+  ["Position","Headcount",`Avg. ${PROGRESS_SCOPES[progressScope].short} %`,"Overdue courses"].forEach((h,i)=>{
+    const c = sum.getCell(r, i+1);
+    c.value = h; c.font = { bold:true, color:{argb:"FFFFFFFF"} };
+    c.fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FF0D9488"} };
+    c.alignment = { horizontal: i===0?"left":"center" };
+  });
+  r++;
+  POSITION_ORDER.forEach(pk=>{
+    const mine = stats.filter(s=>s.p.positionKey===pk);
+    if(!mine.length) return;
+    const avg = Math.round(mine.reduce((s,x)=>s+x.pr.pct,0)/mine.length);
+    const od = mine.filter(s=>s.pr.overdue>0).length;
+    sum.getCell(r,1).value = POSITIONS[pk].label;
+    sum.getCell(r,2).value = mine.length; sum.getCell(r,2).alignment = { horizontal:"center" };
+    sum.getCell(r,3).value = avg/100; sum.getCell(r,3).numFmt = "0%"; sum.getCell(r,3).alignment = { horizontal:"center" };
+    sum.getCell(r,4).value = od; sum.getCell(r,4).alignment = { horizontal:"center" };
+    if(od>0) sum.getCell(r,4).font = { color:{argb:"FFDC2626"}, bold:true };
+    r++;
+  });
+  sum.getCell(`A${r+1}`).value = 'The "Training Report" sheet can be re-imported via "Import test results (Excel)" on the dashboard.';
+  sum.getCell(`A${r+1}`).font = { italic:true, size:10, color:{argb:"FF94A3B8"} };
+
+  const tr = wb.addWorksheet("Training Report", { properties: { tabColor: { argb:"FF0D9488" } } });
+  tr.columns = [{width:6},{width:20},{width:20},{width:16},{width:16}];
+  let tRow = 1;
+  tr.mergeCells(`A${tRow}:E${tRow}`);
+  tr.getCell(`A${tRow}`).value = 'Training Report — Courses & Test Methods (re-importable via "Import test results (Excel)")';
+  tr.getCell(`A${tRow}`).font = { bold:true, size:12, color:{argb:"FFFFFFFF"} };
+  tr.getCell(`A${tRow}`).fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FF0B1F3A"} };
+  tr.getRow(tRow).height = 22;
+  tRow += 2;
+
+  active.forEach(person=>{
+    tr.mergeCells(`A${tRow}:E${tRow}`);
+    tr.getCell(`A${tRow}`).value = `Name: ${person.name}`;
+    tr.getCell(`A${tRow}`).font = { bold:true, size:11, color:{argb:"FF0B1F3A"} };
+    tr.getCell(`A${tRow}`).fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FFDFF4F6"} };
+    tr.getRow(tRow).height = 20;
+    tRow++;
+
+    tr.mergeCells(`A${tRow}:E${tRow}`);
+    const rStatus = resolvedPersonStatus(person);
+    const rotNote = rStatus==="rotation" && rotationFromTo(person) ? ` (${rotationFromTo(person)})` : "";
+    tr.getCell(`A${tRow}`).value = `Position: ${POSITIONS[person.positionKey].label}   ·   Start date: ${person.startDate?fmtDate(parseISO(person.startDate)):"—"}   ·   Status: ${PERSON_STATUS_LABELS[rStatus]}${rotNote}`;
+    tr.getCell(`A${tRow}`).font = { italic:true, size:9.5, color:{argb:"FF64748B"} };
+    tRow++;
+
+    ["No.","Course","Description","Complete Date","Re-Training Date"].forEach((h,i)=>{
+      const c = tr.getCell(tRow, i+1);
+      c.value = h; c.font = { bold:true, color:{argb:"FFFFFFFF"}, size:10 };
+      c.fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FF0D9488"} };
+    });
+    tRow++;
+
+    excelPersonRows(person).forEach((row,i)=>{
+      tr.getCell(tRow,1).value = i+1;
+      tr.getCell(tRow,2).value = row.course || "";
+      tr.getCell(tRow,3).value = row.description || "";
+      excelDateCell(tr.getCell(tRow,4), row.completeISO);
+      excelDateCell(tr.getCell(tRow,5), row.retrainISO);
+      if(i%2===1) for(let col=1; col<=5; col++) tr.getCell(tRow,col).fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FFFAFAFA"} };
+      tRow++;
+    });
+    tRow++;
+  });
+
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const filename = `Olefins-UT-Training-Report-${toISO(new Date())}.xlsx`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 4000);
+  return filename;
+}
   function openExportReportModal(){
     document.getElementById("exportReportErr").textContent = "";
     const noteEl = document.getElementById("exportReportScopeNote");
@@ -2070,28 +2224,32 @@
     const el = document.getElementById("exportReportModal");
     if(el) el.hidden = true;
   }
-  function generateExportReport(){
-    const errEl = document.getElementById("exportReportErr");
-    const scopes = [];
-    if(document.getElementById("exportScopeOverall").checked) scopes.push("overall");
-    if(document.getElementById("exportScopeNewcomers").checked) scopes.push("newcomers");
-    if(document.getElementById("exportScopeRotated").checked) scopes.push("rotated");
-    if(!scopes.length){ errEl.textContent = "Tick at least one section to include."; return; }
-    if(typeof PptxGenJS === "undefined"){ errEl.textContent = "The PowerPoint library didn't load — check your internet connection and try again."; return; }
-    errEl.textContent = "";
-    const btn = document.getElementById("exportReportGenerate");
-    const prevLabel = btn.textContent;
-    btn.textContent = "Generating…";
-    btn.disabled = true;
-    Promise.resolve(buildAndDownloadReport(scopes)).then(()=>{
-      btn.textContent = prevLabel; btn.disabled = false;
-      closeExportReportModal();
-    }).catch(err=>{
-      btn.textContent = prevLabel; btn.disabled = false;
-      errEl.textContent = "Couldn't generate the file: " + (err && err.message ? err.message : String(err));
-    });
-  }
-
+ function generateExportReport(){
+  const errEl = document.getElementById("exportReportErr");
+  const scopes = [];
+  if(document.getElementById("exportScopeOverall").checked) scopes.push("overall");
+  if(document.getElementById("exportScopeNewcomers").checked) scopes.push("newcomers");
+  if(document.getElementById("exportScopeRotated").checked) scopes.push("rotated");
+  const wantExcel = document.getElementById("exportFormatExcel").checked;
+  if(!scopes.length && !wantExcel){ errEl.textContent = "Tick at least one PowerPoint section, or the Excel export."; return; }
+  if(scopes.length && typeof PptxGenJS === "undefined"){ errEl.textContent = "The PowerPoint library didn't load — check your internet connection and try again."; return; }
+  if(wantExcel && typeof ExcelJS === "undefined"){ errEl.textContent = "The Excel library didn't load — check your internet connection and try again."; return; }
+  errEl.textContent = "";
+  const btn = document.getElementById("exportReportGenerate");
+  const prevLabel = btn.textContent;
+  btn.textContent = "Generating…";
+  btn.disabled = true;
+  const jobs = [];
+  if(scopes.length) jobs.push(Promise.resolve(buildAndDownloadReport(scopes)));
+  if(wantExcel) jobs.push(buildAndDownloadExcelReport());
+  Promise.all(jobs).then(()=>{
+    btn.textContent = prevLabel; btn.disabled = false;
+    closeExportReportModal();
+  }).catch(err=>{
+    btn.textContent = prevLabel; btn.disabled = false;
+    errEl.textContent = "Couldn't generate the file(s): " + (err && err.message ? err.message : String(err));
+  });
+}
   // ---------- small building blocks ----------
   function ringSVG(pct, size, stroke, color){
     const r=(size-stroke)/2, c=2*Math.PI*r, off=c*(1-pct/100);
