@@ -19,7 +19,7 @@ all. This version saves every change straight to a shared database, so:
 ## Files in this delivery
 
 - **`index.html`** — the app itself. All the UI/course logic lives here. This is the updated
-  (v3.19) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
+  (v3.20) version — see "Position changes / rotations", "Per-person Status", "Progress scope (new)",
   "Export Report", **"Test Methods — Competency & Re-evaluation Tracking (v3.6)"**, **"Re-evaluation
   tab, editable dates & Excel import (new, v3.7)"**, **"Test methods now scope to your current
   position, and Excel import now updates the Planner/Schedule tab too (v3.8)"**, **"Test-method
@@ -35,9 +35,10 @@ all. This version saves every change straight to a shared database, so:
   (v3.15)"**, **"Courses and Test Methods are now one merged table, and a genuine duplication
   is now eliminated (v3.16)"**, **"Test Methods now show only what's actually in a position's
   own curriculum, and the tick/assign checkbox is gone (v3.17)"**, **"Methods you've already
-  completed under a previous position now stay visible, just marked inactive (v3.18)"**, and
+  completed under a previous position now stay visible, just marked inactive (v3.18)"**,
   **"Excel import now matches document courses by their real Document No., not just the Lab-code
-  (v3.19)"** below for what's new.
+  (v3.19)"**, and **"Manage courses" now has a plan-revision import and a per-row Edit button,
+  including applies-to editing (v3.20)"** below for what's new.
 - **`config.js`** — your Supabase project URL and public ("anon") key. This is what tells
   `index.html` which database to talk to. Safe to commit publicly — see the comment in the file.
   Unchanged from before — you don't need to re-copy it if you already have it in your repo.
@@ -748,6 +749,63 @@ This fix is specifically about the Planner/Schedule tab's Completed date for doc
 either side, it's worth re-running your last few Excel imports** (the same files, no changes needed) so
 any Completed dates that were silently missed the first time get picked up now.
 
+## "Manage courses" now has a plan-revision import and a per-row Edit button, including applies-to editing (v3.20)
+
+You asked for two things on the "Manage courses" tab: *"There should be a function of importing data
+from excel file, where I can import data from the Functional Training Plan CL-D-1000-0001 which I
+have updated you from the beginning. This is to update when there is a new revision of
+CL-D-1000-0001 in which there are changes (supplement/ position level application/ obsolete...) in
+courses are up-to-date... You're still building the plan (P1, P2, P3..) automatically based on this
+as previously right? At each course's row, there would be a EDIT button, where I can edit manually
+the course. In addition to the info being shown, there would be the edit function for the position
+level would be applied after editing."*
+
+**1. Import a new revision of CL-D-1000-0001 and review it before anything changes.** A new **"Import
+plan revision (CL-D-1000-0001)"** button sits in the "Manage courses" toolbar. Pick the updated plan
+workbook and it reads the SM / SS / ENG / Gas Analyst / Oil Analyst / Utility Analyst sheets (the
+same ones the app was originally built from — DM, ENG. and TECH-Day PCL. are out of this app's scope
+and are skipped, not misapplied) and compares every row, by its real Document No. (not the Lab-code —
+same reasoning as the v3.19 fix above), against what's currently on record for each curriculum:
+
+- **New courses** ("supplement") — shown with their Phase auto-classified exactly the way the
+  original plan document was: a `(*)`-suffixed Lab-code is Phase 2 (critical), a fixed set of
+  universal Document Nos. is Phase 1 (plus three Gas-specific ones that are Phase 1 only within the
+  Gas curriculum), and everything else defaults to Phase 3 — matching how you'd previously told me to
+  classify them by hand. You can adjust the Phase and Week/Bucket for any new course right on the
+  review screen before applying, the same fields you'd set on "Add course."
+- **Changed courses** — a topic, hours, trainer, or evaluation-method difference from what's on
+  record is shown as a plain diff. **A Lab-code difference is shown too, but for information only —
+  it is never applied automatically.** Code is the one field this app has always treated as a fixed
+  identifier (it's what course edits are filed under internally), so renaming it automatically risks
+  silently losing track of a course's history; if a Lab-code genuinely needs correcting, that's a
+  manual step for now (see the Edit panel below — Code isn't editable there either, on purpose).
+- **Possibly obsolete courses** ("obsolete") — anything currently on record that the new file no
+  longer lists is offered as **Deactivate**, per what you asked for: kept on record with full history,
+  just marked inactive, exactly like removing a course has always worked in this app. Nothing is ever
+  hard-deleted by an import.
+- **Nothing is saved until you click Apply.** Every row has its own checkbox (all checked by default)
+  so you can exclude anything the automatic read got wrong, and the whole batch shares one
+  effective-date + scope choice — the same "apply to everyone now" vs. "newcomers only" control every
+  other course edit in this app already uses.
+- A new course that shows up as "supplement" for more than one position in the same import (a course
+  taught to several roles at once) is added once, with every applicable position's box already
+  checked — not as several near-duplicate entries.
+
+**2. Every course row now has an Edit button**, next to the existing Remove/Deactivate action. It
+opens a small panel with the fields that weren't editable inline before — Trainer and Evaluation
+method — plus, per your fourth request, **which curricula this course applies to.** Each of the 6
+positions gets its own checkbox with its own Phase and Week/Bucket right there: tick a curriculum the
+course doesn't currently belong to and it extends there (auto-filling that curriculum's Phase/Week
+from the course's own current values, so ticking alone is enough); untick one it does belong to and
+it's dropped from just that curriculum, leaving it untouched everywhere else. Like every other course
+edit, this stages into the same effective-date + scope "Apply" bar rather than saving immediately —
+you can open the Edit panel, make changes across several courses, and apply them together. Code stays
+read-only here too, for the same reason it's informational-only in the plan-revision review above.
+
+Both features build entirely on the dated/scoped course-revision mechanism this app already had (the
+same one behind every inline course edit since early on) — nothing new to migrate, and no schema
+change, so there's no new `migration_*.sql` file for this round.
+
 ## Test Methods — Competency & Re-evaluation Tracking (v3.6)
 
 This is the same page as everything above — I originally built this as a separate app and separate
@@ -998,7 +1056,36 @@ loosened Course-column regex plus its new leading-zero-tolerant comparison corre
 `Lab-01-03-12` against a stored `Lab-01-03-012`-style code on their own, independent of the Document-No.
 path. The full pre-existing suite (v3.9–v3.18 included) was re-run afterward and confirmed to still
 pass, with no fixture changes needed this round — the fix only adds new matching paths, it doesn't
-change any existing one's behavior. `node --check` clean throughout.
+change any existing one's behavior. `node --check` clean throughout; and new for v3.20 — for the
+per-row Edit panel: opening it on a real course (`sm-10` / `Lab-03-03-001`, which the live data has
+applying to Section Manager and Lead/Senior/QC Engineer only) correctly pre-fills Trainer and
+Evaluation method and shows the Applies-to checkboxes matching that real data exactly; extending it
+to Gas auto-seeds that curriculum's Phase/Week-or-Bucket from the course's own current values the
+moment the box is checked; narrowing it by dropping Eng stages a "Pending" chip the same way any
+other field edit does; committing through the existing effective-date/scope Apply bar correctly
+shows the course on the Gas tab and removes it from the Eng tab, leaves the untouched SM tab alone,
+and the panel — which stays open across tab switches by design — immediately reflects the
+post-commit checkbox state without needing to be closed and reopened. For the plan-revision import: a
+synthetic workbook seeded directly from the app's own real SM and Gas COURSE_DATA (not invented data)
+with a deliberate set of changes — a Lab-code + hours + trainer change on `CL-M-1000-0001`, an
+existing course (`CL-P-1000-0002`) dropped from the file entirely, and four new rows exercising every
+branch of the auto-classification rule (a `(*)`-suffixed new course → correctly P2; a universal
+Phase-1 Document No. new to SM → correctly P1; that same Gas-only Phase-1 Document No. imported under
+SM instead of Gas → correctly stays P3, confirming the Gas-only scoping doesn't leak into other
+curricula; an unremarkable new document → correctly defaults to P3) — correctly produces a review
+screen showing only the SM curriculum (Gas, imported byte-for-byte unchanged, produces zero diff and
+never appears); the changed row's Lab-code diff is shown but labeled informational-only; unchecking
+one of the four new courses before Apply correctly excludes only that one; and after Apply, the
+Lab-code on record for `CL-M-1000-0001` is confirmed unchanged (never auto-applied) while its hours
+and trainer changes are, `CL-P-1000-0002` is confirmed still present but now inactive, all three
+included new courses appear with the correct auto-classified Phase, the excluded one does not appear
+at all, and the Gas tab (81 courses) is confirmed completely unaffected by the SM-side import,
+byte-for-byte. The full pre-existing suite (28 files, all rounds through v3.19) was re-run afterward
+and confirmed to still pass — one older, position-rotation test file (`_pw_poschange.js`) turned out
+to have a stale mock database missing the `onb_methods` table (predating that table's introduction,
+unrelated to this round's changes), which surfaced as the mock's initial data fetch failing; fixed
+the fixture and confirmed the actual rotation logic it tests is unaffected. `node --check` clean
+throughout.
 However, this sandbox's network access doesn't
 reach Supabase or GitHub directly, so I have not been able to load the page against your *real*
 database over the internet. Please do a quick smoke test after you publish it: open the page,
@@ -1051,7 +1138,16 @@ from the bug report is ideal) against the affected Section Manager and confirm `
 any other course whose Completed date stayed blank before) now picks up its date on the Planner/
 Schedule tab; then check the import result banner for any remaining "Course code(s) not found"
 entries — those are genuinely not in that person's current curriculum (company-wide training, or a
-position they've since rotated out of), not this bug.
+position they've since rotated out of), not this bug. For v3.20, in "Manage courses" try the Edit
+button on a course that applies to more than one position and confirm the Applies-to checkboxes match
+what you already know is true; try extending it to a new position and dropping it from an existing
+one, apply, and confirm both tabs updated correctly. Then get a real, up-to-date copy of the
+Functional Training Plan CL-D-1000-0001 and try "Import plan revision" against it — before clicking
+Apply, read through every section on the review screen carefully (this is exactly why it's a review
+screen and not an immediate apply): check that new courses landed in the Phase you'd expect, that
+anything marked "possibly obsolete" is actually meant to be retired and not just a Lab-code rename
+that should instead be a manual Edit, and that changed items' diffs look right — then apply and
+spot-check a few of the affected people's own pages.
 
 ## Everyday use
 

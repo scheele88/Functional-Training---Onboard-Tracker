@@ -234,6 +234,9 @@
   .admin-applies-to{ display:flex; flex-wrap:wrap; gap:4px 12px; padding:7px 9px; border-radius:7px; border:1px solid var(--border-strong); background:var(--surface); }
   .admin-check{ display:flex; align-items:center; gap:5px; font-size:12px; font-weight:500; color:var(--ink); text-transform:none; letter-spacing:normal; cursor:pointer; white-space:nowrap; }
   .admin-check input{ cursor:pointer; }
+  table.admin-edit-applies-table{ width:100%; border-collapse:collapse; margin-top:4px; }
+  table.admin-edit-applies-table td{ padding:3px 8px 3px 0; vertical-align:middle; }
+  tr.admin-edit-panel-row td{ background:var(--surface-2); padding:10px 14px; }
   .admin-pending-bar{
     display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; padding:12px 18px; border-bottom:1px solid var(--border);
     background:var(--progress-soft); color:var(--progress-ink); font-size:12.5px; font-weight:600;
@@ -592,6 +595,15 @@
   // course down to fewer curricula without deleting it outright.
   let adminRemoveHereConfirmId = null;
   let adminPending = {};              // staged, not-yet-committed course edits (see commitPendingEdits) — normCode(code) -> {fields, perCurriculum}
+  let adminEditRowCode = null;        // v3.20 — normCode of the course row currently showing the expanded Edit panel (one at a time)
+  // v3.20 — the plan-revision import review screen's working state, or null when it's not open.
+  // { filename, perCurriculum, unclassifiable, excluded: Set<"courseKey|kind|doc">,
+  //   addedOverrides: Map<"courseKey|doc", {phaseKey,week,postLabel,labCode}>, effectiveDate, scope }
+  // Nothing in here touches STATE until "Apply" — reviewing, checking a curriculum's boxes off, or
+  // adjusting a new course's phase never writes anything, exactly per the user's "review before
+  // applying" choice.
+  let planImportReview = null;
+  let planImportError = "";           // v3.20 — shown on the Manage-courses toolbar when a plan-revision file couldn't be read at all
   let adminApplyOpen = false;         // whether the effective-date/scope picker for pending edits is open
 
   const COURSE_KEY_ORDER = ["sm","ss","eng","gas","oil","utility"];
@@ -667,6 +679,56 @@
     if(rev.scope==="everyone") return todayISO >= (rev.effectiveDate||"");
     return (refDateISO||todayISO) >= (rev.effectiveDate||"");
   }
+  // v3.20 — per the user: the per-row "Edit" button should let you change which curricula a course
+  // applies to, not just its own fields — today that's only possible for a custom course, and only at
+  // creation time. `perCurriculum[courseKey].appliesOverride` (true/false) is a revision field exactly
+  // like phaseKey/week/postLabel/active — set false to drop a course (base OR custom) from a curriculum
+  // it currently belongs to, set true to extend it to one it doesn't. `courseAppliesOverride` reads the
+  // most recent applicable override, if any; `courseCurrentlyAppliesTo` falls back to the course's own
+  // base/custom membership when there's no override at all — i.e. today's existing behavior, untouched,
+  // for every course nobody has ever edited this way.
+  function courseAppliesOverride(code, courseKey, refDateISO){
+    let result;
+    revisionsFor(code).forEach(rev=>{
+      if(!revisionApplies(rev, refDateISO)) return;
+      if(rev.perCurriculum && rev.perCurriculum[courseKey] && Object.prototype.hasOwnProperty.call(rev.perCurriculum[courseKey], "appliesOverride")){
+        result = rev.perCurriculum[courseKey].appliesOverride;
+      }
+    });
+    return result;
+  }
+  function courseCurrentlyAppliesTo(code, courseKey, refDateISO){
+    const override = courseAppliesOverride(code, courseKey, refDateISO);
+    if(override===true) return true;
+    if(override===false) return false;
+    const norm = normCode(code);
+    const inBase = (COURSE_DATA[courseKey]||[]).some(it=>normCode(it.code)===norm);
+    const inCustom = (STATE.customCourses||[]).some(c=>c.positions && c.positions[courseKey] && normCode(c.code)===norm);
+    return inBase || inCustom;
+  }
+  // Canonical field-source per normCode, across the whole catalog (every curriculum's COURSE_DATA plus
+  // every custom course) — used when a course is extended to a curriculum it didn't originally belong
+  // to (via appliesOverride:true above), so the injected row still has real topic/type/hours/trainer/
+  // evalMethod to show. Prefers a base (source-plan) entry when one exists anywhere — every curriculum
+  // sharing a code already treats it as one identical record (see the v2.10 comment above) — falling
+  // back to a custom course's own fields otherwise.
+  function allCourseRecordsByCode(){
+    const map = {};
+    COURSE_KEY_ORDER.forEach(ck=>{
+      (COURSE_DATA[ck]||[]).forEach(it=>{
+        const n = normCode(it.code);
+        // `id` is whichever curriculum's copy we hit first in COURSE_KEY_ORDER (e.g. "sm-10") — reused
+        // as-is for a row injected into another curriculum via appliesOverride, since real ids in THAT
+        // curriculum's own array always use ITS OWN prefix (e.g. "gas-37"), so no collision risk.
+        if(!map[n]) map[n] = { id: it.id, code: it.code, topic: it.topic, type: it.type, hours: it.hours, trainer: it.trainer||"", evalMethod: it.evalMethod||"", no: it.no, method: it.method||"SL", custom:false };
+      });
+    });
+    (STATE.customCourses||[]).forEach(c=>{
+      const n = normCode(c.code);
+      if(!map[n]) map[n] = { id: c.id, code: c.code, topic: c.topic, type: c.type, hours: c.hours, trainer: c.trainer||"", evalMethod: c.evalMethod||"", no: c.no||9000, method:"SL", custom:true };
+    });
+    return map;
+  }
   function resolveCourseForCurriculum(baseItem, courseKey, refDateISO){
     let merged = Object.assign({}, baseItem);
     revisionsFor(baseItem.code).forEach(rev=>{
@@ -710,9 +772,13 @@
   }
   // Admin-added supplemental courses that apply to this curriculum (gated by their own creation-time
   // effectiveDate/scope, then further revisions — e.g. a later edit to hours/phase — resolved on top).
+  // v3.20 — also respects an explicit appliesOverride:false (the new Edit form's way of dropping a
+  // custom course from one of its original curricula after the fact, alongside the pre-existing "Only
+  // remove from <curriculum>" instant action — either one works, they don't conflict).
   function customCoursesFor(courseKey, refDateISO){
     return (STATE.customCourses||[])
       .filter(c=>c.positions && c.positions[courseKey] && revisionApplies({scope:c.scope, effectiveDate:c.effectiveDate}, refDateISO))
+      .filter(c=>courseAppliesOverride(c.code, courseKey, refDateISO)!==false)
       .map(c=>{
         const pos = c.positions[courseKey];
         const base = Object.assign({
@@ -722,23 +788,46 @@
         return resolveCourseForCurriculum(base, courseKey, refDateISO);
       });
   }
-  // Which OTHER curricula also use this course code (for the "also used by" admin badge).
+  // Which OTHER curricula also use this course code (for the "also used by" admin badge) — v3.20: now
+  // routed through courseCurrentlyAppliesTo so a curriculum added or dropped via the new Edit form's
+  // "Applies to" checkboxes is reflected here too, not just the original base/custom membership.
   function curriculaSharingCode(code, excludingKey){
-    const norm = normCode(code);
     const out = new Set();
     COURSE_KEY_ORDER.forEach(ck=>{
       if(ck===excludingKey) return;
-      const inBase = (COURSE_DATA[ck]||[]).some(it=>normCode(it.code)===norm);
-      const inCustom = (STATE.customCourses||[]).some(c=>c.positions && c.positions[ck] && normCode(c.code)===norm);
-      if(inBase || inCustom) out.add(ck);
+      if(courseCurrentlyAppliesTo(code, ck)) out.add(ck);
     });
     return [...out];
   }
   // Every course for a curriculum, including deactivated/not-yet-effective ones — for the admin table,
   // which needs to show (and let you reactivate) courses that courseData() below deliberately hides.
+  // v3.20 — three tiers: (1) base (source-plan) courses that already belong here per COURSE_DATA,
+  // unless explicitly dropped via appliesOverride:false; (2) custom courses created for this curriculum
+  // (customCoursesFor already applies the same override filtering); (3) NEW — any other course, base or
+  // custom, explicitly EXTENDED to this curriculum via appliesOverride:true from the Edit form, sourced
+  // from the cross-catalog registry since it has no entry of its own here yet.
   function adminCourseRows(courseKey, refDateISO){
-    return baseCourseWithEdits(courseKey, refDateISO).map(it=>Object.assign({custom:false}, it))
-      .concat(customCoursesFor(courseKey, refDateISO).map(it=>Object.assign({custom:true}, it)));
+    const seen = new Set();
+    const out = [];
+    baseCourseWithEdits(courseKey, refDateISO).forEach(it=>{
+      if(courseAppliesOverride(it.code, courseKey, refDateISO)===false) return;
+      seen.add(normCode(it.code));
+      out.push(Object.assign({custom:false}, it));
+    });
+    customCoursesFor(courseKey, refDateISO).forEach(it=>{
+      seen.add(normCode(it.code));
+      out.push(Object.assign({custom:true}, it));
+    });
+    const registry = allCourseRecordsByCode();
+    Object.keys(STATE.courseEdits||{}).forEach(norm=>{
+      if(seen.has(norm)) return;
+      if(courseAppliesOverride(norm, courseKey, refDateISO)!==true) return;
+      const base = registry[norm];
+      if(!base) return;
+      seen.add(norm);
+      out.push(Object.assign({custom: base.custom===true}, resolveCourseForCurriculum(base, courseKey, refDateISO)));
+    });
+    return out;
   }
   // The effective, active-only course list every schedule/progress/meta computation uses. Pass a
   // reference date — a specific person's Start Date, or omit for "as of today" — since a "newcomers
@@ -746,6 +835,128 @@
   function courseData(positionKey, refDateISO){
     const courseKey = POSITIONS[positionKey].courseKey;
     return adminCourseRows(courseKey, refDateISO).filter(it=>it.active!==false);
+  }
+
+  // ---------- v3.20: Import a new CL-D-1000-0001 plan revision ----------
+  // Per the user: when CL-D-1000-0001 gets a new revision (supplement/position-level-application/
+  // obsolete changes), "Manage courses" should be able to read it directly instead of every change
+  // being re-typed by hand. Confirmed directly against the real source file: each position's sheet
+  // (SM/SS/ENG/Gas Analyst/Oil Analyst/Utility Analyst) carries No./Code/Topic/Method/Hours/Trainer/
+  // EvalMethod columns but — contrary to what might be assumed — NO Phase (P1/P2/P3) or Week/Bucket
+  // column at all; that grouping was assigned by hand when this app's course list was first built, not
+  // read off the sheet. Reverse-engineered against the CURRENT course data (zero exceptions found
+  // across all 565 course-curriculum entries): Phase 2 = exactly the courses whose Code carries the
+  // "(*)" critical suffix; Phase 1 = a fixed, curated set of "day-1 essentials" Document Nos. (Quality
+  // Manual, sample receiving/handling, lab safety, chemical-activity instructions, test-sample prep —
+  // universal — plus three Gas-hardware-specific ones that are Phase 1 for Gas Analyst only); everything
+  // else defaults to Phase 3. classifyImportedPhase() below encodes exactly that rule, so a genuinely
+  // new course gets a sensible phase automatically — always shown on the review screen for the admin to
+  // confirm or change before anything is applied, never silently.
+  const PHASE1_DOC_CODES_UNIVERSAL = new Set([
+    "CL-M-1000-0001",     // Quality Manual
+    "CL-W-1000-99-0001",  // Receiving, handling and controlling test samples
+    "CL-W-1000-99-0007",  // Laboratory Safety Guideline
+    "CL-W-1000-99-0013",  // Instruction for all chemical activities in Laboratory
+    "CL-W-1000-99-0019",  // Preparation of Testing Samples
+  ]);
+  const PHASE1_DOC_CODES_GAS_ONLY = new Set([
+    "CL-W-1000-99-0041",  // Gas Sampling in LINE
+    "CL-W-1000-99-0063",  // The procedure for replacing the gas tank in the test...
+    "CL-W-2000-99-0002",  // Method of vaporizing gas
+  ]);
+  function classifyImportedPhase(labCode, topic, courseKey){
+    if(/\(\*\)\s*$/.test(String(labCode||""))) return "p2";
+    const doc = extractEmbeddedDocCode(topic);
+    if(doc && PHASE1_DOC_CODES_UNIVERSAL.has(doc)) return "p1";
+    if(doc && courseKey==="gas" && PHASE1_DOC_CODES_GAS_ONLY.has(doc)) return "p1";
+    return "p4";
+  }
+  // Which sheet in the source workbook feeds which curriculum. DM (Department Manager) is deliberately
+  // out of this app's scope (matches "Excludes Department Manager" elsewhere); "ENG." and "TECH-Day
+  // PCL." are confirmed (via the sheet's own "For Job Position" cell) to be Polyolefins-section
+  // positions — a different part of the plant this Olefins-section app doesn't cover — not typos or
+  // duplicates of "ENG" / an Olefins Analyst sheet. Both are reported as skipped, not silently dropped.
+  const PLAN_IMPORT_SHEET_MAP = { "SM":"sm", "SS":"ss", "ENG":"eng", "Gas Analyst":"gas", "Oil Analyst":"oil", "Utility Analyst":"utility" };
+  function findPlanHeaderRow(rows){
+    for(let i=0;i<rows.length;i++){
+      const cells = (rows[i]||[]).map(c=>String(c==null?"":c).trim().toLowerCase());
+      if(cells[0]==="no." && /code/.test(cells[1]||"")) return i;
+    }
+    return -1;
+  }
+  function parsePlanRevisionWorkbook(wb){
+    const bySheet = {};
+    const skippedSheets = [];
+    wb.SheetNames.forEach(sheetName=>{
+      const courseKey = PLAN_IMPORT_SHEET_MAP[sheetName];
+      if(!courseKey){ skippedSheets.push(sheetName + " (not a tracked Olefins position)"); return; }
+      const sheet = wb.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header:1, raw:false, defval:"" });
+      const headerIdx = findPlanHeaderRow(rows);
+      if(headerIdx<0){ skippedSheets.push(sheetName + " (couldn't find the No./Code header row)"); return; }
+      const items = [];
+      for(let r=headerIdx+1;r<rows.length;r++){
+        const cells = (rows[r]||[]).map(c=>String(c==null?"":c).trim());
+        const labCode = cells[1]||"";
+        // Skips the throwaway "1,2,3..." column-index row directly under the header (its Code cell is
+        // a bare number, not a real Lab-code) and any genuinely blank row.
+        if(!/^[A-Za-z]/.test(labCode)) continue;
+        const topic = cells[2]||"";
+        if(!topic) continue;
+        items.push({ labCode, topic, method: cells[4]||"", hours: Number(cells[5])||0, trainer: cells[6]||"", evalMethod: cells[7]||"" });
+      }
+      bySheet[courseKey] = items;
+    });
+    return { bySheet, skippedSheets };
+  }
+  // Matches by embedded Document No. — not the Lab-code — for the same reason v3.19 already fixed for
+  // Excel import of completion records: Lab-codes can genuinely renumber between revisions or systems,
+  // but a course's real Document No. doesn't. A course with no extractable Document No. at all can't be
+  // reliably diffed and is reported separately rather than guessed at.
+  function buildPlanRevisionDiff(bySheet){
+    const perCurriculum = {};
+    let unclassifiable = [];
+    Object.keys(bySheet).forEach(courseKey=>{
+      const imported = bySheet[courseKey];
+      const current = adminCourseRows(courseKey); // today, including inactive — so a re-added course
+                                                    // that's currently deactivated is treated as a real
+                                                    // change (reactivate-worthy), not silently "added".
+      const currentByDoc = {};
+      current.forEach(it=>{
+        const doc = extractEmbeddedDocCode(it.topic);
+        if(doc) currentByDoc[doc] = it;
+      });
+      const matchedDocs = new Set();
+      const added = [], changed = [];
+      imported.forEach(imp=>{
+        const doc = extractEmbeddedDocCode(imp.topic);
+        if(!doc){ unclassifiable.push(Object.assign({courseKey}, imp)); return; }
+        const existing = currentByDoc[doc];
+        if(!existing){
+          added.push({
+            doc, labCode: imp.labCode, topic: imp.topic, type: /test method/i.test(imp.method)?"Test Method (OJT)":"Document",
+            hours: imp.hours, trainer: imp.trainer, evalMethod: imp.evalMethod,
+            phaseKey: classifyImportedPhase(imp.labCode, imp.topic, courseKey),
+          });
+          return;
+        }
+        matchedDocs.add(doc);
+        const fieldDiffs = {};
+        if(normCode(existing.code)!==normCode(imp.labCode)) fieldDiffs.code = { from: existing.code, to: imp.labCode };
+        if((existing.topic||"").trim()!==imp.topic.trim()) fieldDiffs.topic = { from: existing.topic, to: imp.topic };
+        if(Number(existing.hours)!==Number(imp.hours) && imp.hours>0) fieldDiffs.hours = { from: existing.hours, to: imp.hours };
+        if((existing.trainer||"").trim()!==(imp.trainer||"").trim() && imp.trainer) fieldDiffs.trainer = { from: existing.trainer, to: imp.trainer };
+        if((existing.evalMethod||"").trim()!==(imp.evalMethod||"").trim() && imp.evalMethod) fieldDiffs.evalMethod = { from: existing.evalMethod, to: imp.evalMethod };
+        if(Object.keys(fieldDiffs).length) changed.push({ doc, id: existing.id, code: existing.code, topic: existing.topic, custom: existing.custom, fieldDiffs });
+      });
+      const obsolete = current
+        .filter(it=>it.active!==false)
+        .map(it=>({ it, doc: extractEmbeddedDocCode(it.topic) }))
+        .filter(x=>x.doc && !matchedDocs.has(x.doc))
+        .map(x=>({ doc:x.doc, id:x.it.id, code:x.it.code, topic:x.it.topic, custom:x.it.custom }));
+      if(added.length || changed.length || obsolete.length) perCurriculum[courseKey] = { added, changed, obsolete };
+    });
+    return { perCurriculum, unclassifiable };
   }
   // Derived entirely from the effective course list (not a fixed lookup table), so admin edits —
   // adding a supplemental course, deactivating one, or moving one between phases — immediately and
@@ -2113,6 +2324,184 @@
       <button class="btn" id="cancelNewCourse">Cancel</button>
     </div>`;
   }
+  // v3.20 — per the user: an Edit button per course row, surfacing what isn't editable inline today —
+  // Trainer and Eval. method (shown nowhere in the admin table at all until now), plus, the actual
+  // point of the request, which curricula this course applies to. Every checkbox/select here stages
+  // through the exact same stageEdit()/adminPending pipeline the inline Topic/Type/Hours/Phase fields
+  // already use — it shares the same "Apply N changes" effective-date + scope bar below, it just lives
+  // in an expanded panel instead of the row itself, since applies-to is inherently a per-curriculum
+  // decision (Phase/Week can differ for each curriculum a course is checked into) that doesn't fit one
+  // table cell. Reopening this panel for a DIFFERENT row leaves whatever's already staged for this one
+  // exactly as it was — closing the panel ("Done") never discards anything, same as it always didn't
+  // for the inline fields.
+  function renderAdminEditPanel(it, courseKey){
+    const norm = normCode(it.code);
+    const registryBase = allCourseRecordsByCode()[norm] || it;
+    // A repaint must reflect whatever's already staged in adminPending, not just committed data — the
+    // same principle withPendingOverlay already applies to the row itself — or checking a box (or
+    // changing its Phase/Week) would visually revert the instant paint() runs.
+    const pendingForNorm = adminPending[norm];
+    const rows = COURSE_KEY_ORDER.map(ck=>{
+      const pendingPerCk = pendingForNorm && pendingForNorm.perCurriculum && pendingForNorm.perCurriculum[ck];
+      const pendingOverride = pendingPerCk && Object.prototype.hasOwnProperty.call(pendingPerCk, "appliesOverride") ? pendingPerCk.appliesOverride : undefined;
+      const committedApplies = courseCurrentlyAppliesTo(it.code, ck);
+      const applies = pendingOverride!==undefined ? pendingOverride : committedApplies;
+      // When this curriculum already has the course, show ITS actual current phase/week/bucket (which
+      // can legitimately differ per curriculum — e.g. Phase 2 for SS, Phase 1 for Utility), with
+      // anything already staged for it overlaid on top. When it doesn't, default to the values on the
+      // row you opened Edit from, as a starting point to adjust.
+      const resolvedHere = committedApplies ? resolveCourseForCurriculum(registryBase, ck) : it;
+      const phaseKey = (pendingPerCk && pendingPerCk.phaseKey) || resolvedHere.phaseKey;
+      const week = (pendingPerCk && pendingPerCk.week) || resolvedHere.week;
+      const postLabel = (pendingPerCk && pendingPerCk.postLabel!==undefined) ? pendingPerCk.postLabel : resolvedHere.postLabel;
+      return `<tr class="admin-edit-curriculum-row" data-admin-edit-curriculum="${ck}">
+        <td><label class="admin-check"><input type="checkbox" data-admin-edit-applies="${ck}" ${applies?'checked':''}>${esc(COURSE_KEY_LABELS[ck])}</label></td>
+        <td>
+          <select class="admin-input" data-admin-edit-curriculum-field="phaseKey" data-curriculum="${ck}">
+            <option value="p1" ${phaseKey==='p1'?'selected':''}>P1</option>
+            <option value="p2" ${phaseKey==='p2'?'selected':''}>P2</option>
+            <option value="p4" ${phaseKey==='p4'?'selected':''}>P3</option>
+          </select>
+        </td>
+        <td>${phaseKey==='p4'
+          ? `<input type="text" class="admin-input" data-admin-edit-curriculum-field="postLabel" data-curriculum="${ck}" value="${esc(postLabel||'')}" placeholder="e.g. Month 17-19" style="width:120px">`
+          : `<input type="number" class="admin-input" data-admin-edit-curriculum-field="week" data-curriculum="${ck}" min="1" max="60" step="1" value="${Number(week)||1}" style="width:62px">`}
+        </td>
+      </tr>`;
+    }).join("");
+    return `<tr class="admin-edit-panel-row" data-admin-edit-root="${esc(norm)}">
+      <td colspan="8">
+        <div class="admin-add-form open" style="margin:6px 0">
+          <div class="field"><label>Trainer</label><input type="text" class="admin-input" data-admin-edit-field="trainer" value="${esc(it.trainer||'')}" style="width:220px" placeholder="Job position in charge of training"></div>
+          <div class="field"><label>Eval. method</label><input type="text" class="admin-input" data-admin-edit-field="evalMethod" value="${esc(it.evalMethod||'')}" style="width:90px" list="adminEditEvalMethodList" placeholder="e.g. WT, OJE"></div>
+          <datalist id="adminEditEvalMethodList"><option value="WT"><option value="PR"><option value="IN"><option value="PT"><option value="OJE"><option value="OTH"></datalist>
+          <div class="field" style="min-width:340px;flex:1">
+            <label>Applies to (position-level) — check every curriculum this course belongs to, with its own Phase and Week/Bucket</label>
+            <table class="admin-edit-applies-table"><tbody>${rows}</tbody></table>
+          </div>
+          <button class="btn primary" data-admin-edit-done="${esc(norm)}">Done</button>
+        </div>
+      </td>
+    </tr>`;
+  }
+
+  // v3.20 — the plan-revision import review screen. Per the user's choice: nothing from the uploaded
+  // file is saved until this screen's own "Apply" is clicked, and every row here can be unchecked
+  // individually first. New courses default to the phase classifyImportedPhase() worked out
+  // automatically, editable right here before Apply. "Possibly obsolete" defaults to checked
+  // (Deactivate — kept on record, hidden from new assignments, history untouched) per the user's own
+  // answer, also uncheckable per row.
+  function renderPlanImportReviewView(){
+    const r = planImportReview;
+    const isExcluded = (k)=>r.excluded.has(k);
+    const curriculaWithChanges = COURSE_KEY_ORDER.filter(ck=>r.perCurriculum[ck]);
+    const totalAdded = curriculaWithChanges.reduce((n,ck)=>n+r.perCurriculum[ck].added.length,0);
+    const totalChanged = curriculaWithChanges.reduce((n,ck)=>n+r.perCurriculum[ck].changed.length,0);
+    const totalObsolete = curriculaWithChanges.reduce((n,ck)=>n+r.perCurriculum[ck].obsolete.length,0);
+    const includedCount = (()=>{
+      let n=0;
+      curriculaWithChanges.forEach(ck=>{
+        const d = r.perCurriculum[ck];
+        d.added.forEach(a=>{ if(!isExcluded(`${ck}|added|${a.doc}`)) n++; });
+        d.changed.forEach(c=>{ if(!isExcluded(`${ck}|changed|${c.doc}`)) n++; });
+        d.obsolete.forEach(o=>{ if(!isExcluded(`${ck}|obsolete|${o.doc}`)) n++; });
+      });
+      return n;
+    })();
+    const sections = curriculaWithChanges.map(ck=>{
+      const d = r.perCurriculum[ck];
+      const addedRows = d.added.map(a=>{
+        const key = `${ck}|added|${a.doc}`;
+        const ov = r.addedOverrides.get(`${ck}|${a.doc}`) || {};
+        const phaseKey = ov.phaseKey || a.phaseKey;
+        const week = ov.week!=null ? ov.week : (phaseKey==='p4'?0:1);
+        const postLabel = ov.postLabel!=null ? ov.postLabel : "";
+        return `<tr class="${isExcluded(key)?'row-inactive':''}">
+          <td><input type="checkbox" data-plan-review-toggle="${esc(key)}" ${isExcluded(key)?'':'checked'}></td>
+          <td class="mono" style="font-size:11px">${esc(a.labCode)}<br><span class="hint">${esc(a.doc)}</span></td>
+          <td>${esc(truncate(a.topic,70))}</td>
+          <td>${esc(a.type.indexOf('Test')===0?'Test (OJT)':'Document')}</td>
+          <td>${esc(a.hours)}h</td>
+          <td>
+            <select class="admin-input" data-plan-added-field="phaseKey" data-key="${ck}|${esc(a.doc)}">
+              <option value="p1" ${phaseKey==='p1'?'selected':''}>P1</option>
+              <option value="p2" ${phaseKey==='p2'?'selected':''}>P2</option>
+              <option value="p4" ${phaseKey==='p4'?'selected':''}>P3</option>
+            </select>
+          </td>
+          <td>${phaseKey==='p4'
+            ? `<input type="text" class="admin-input" data-plan-added-field="postLabel" data-key="${ck}|${esc(a.doc)}" value="${esc(postLabel)}" placeholder="e.g. Month 17-19" style="width:110px">`
+            : `<input type="number" class="admin-input" data-plan-added-field="week" data-key="${ck}|${esc(a.doc)}" min="1" max="60" step="1" value="${Number(week)||1}" style="width:56px">`}
+          </td>
+        </tr>`;
+      }).join("");
+      const changedRows = d.changed.map(c=>{
+        const key = `${ck}|changed|${c.doc}`;
+        const applyableFields = Object.keys(c.fieldDiffs).filter(f=>f!=="code");
+        const diffText = applyableFields.map(f=>`${f}: "${c.fieldDiffs[f].from}" → "${c.fieldDiffs[f].to}"`).join("; ");
+        // A Lab-code change is shown for information only and is never auto-applied — Code isn't safely
+        // editable in this release (it's the key `courseEdits` revisions are filed under; renaming it on
+        // apply would silently orphan any edit staged afterward under the new code). Update it manually
+        // via the Edit panel's own fields, or leave it — the app already matches this course by its
+        // Document No. regardless of which Lab-code is on file.
+        const codeNote = c.fieldDiffs.code
+          ? `<div class="hint" style="margin-top:2px;color:#b45309">Lab-code in file: "${esc(c.fieldDiffs.code.to)}" (on record: "${esc(c.fieldDiffs.code.from)}") — shown for information only, not changed automatically.</div>`
+          : "";
+        return `<tr class="${isExcluded(key)?'row-inactive':''}">
+          <td><input type="checkbox" data-plan-review-toggle="${esc(key)}" ${isExcluded(key)?'':'checked'}></td>
+          <td class="mono" style="font-size:11px">${esc(c.code)}<br><span class="hint">${esc(c.doc)}</span></td>
+          <td colspan="4">${esc(truncate(c.topic,55))}${diffText?`<div class="hint" style="margin-top:2px">${esc(diffText)}</div>`:""}${codeNote}</td>
+        </tr>`;
+      }).join("");
+      const obsoleteRows = d.obsolete.map(o=>{
+        const key = `${ck}|obsolete|${o.doc}`;
+        return `<tr class="${isExcluded(key)?'row-inactive':''}">
+          <td><input type="checkbox" data-plan-review-toggle="${esc(key)}" ${isExcluded(key)?'':'checked'}></td>
+          <td class="mono" style="font-size:11px">${esc(o.code)}<br><span class="hint">${esc(o.doc)}</span></td>
+          <td colspan="4">${esc(truncate(o.topic,70))}<div class="hint" style="margin-top:2px">Not found in the new file — will be Deactivated (kept on record, history untouched) unless unchecked.</div></td>
+        </tr>`;
+      }).join("");
+      return `<section class="panel">
+        <div class="panel-head"><h2>${esc(COURSE_KEY_LABELS[ck])}</h2>
+          <div class="meta">${d.added.length} new &nbsp;·&nbsp; ${d.changed.length} changed &nbsp;·&nbsp; ${d.obsolete.length} possibly obsolete</div>
+        </div>
+        <div class="gantt-scroll"><table class="people admin-table">
+          ${d.added.length?`<thead><tr><th></th><th>Code</th><th>Topic</th><th>Type</th><th>Hours</th><th>Phase</th><th>Week/Bucket</th></tr></thead><tbody>${addedRows}</tbody>`:""}
+          ${d.changed.length?`<tbody><tr class="admin-divider"><td colspan="6">Changed</td></tr>${changedRows}</tbody>`:""}
+          ${d.obsolete.length?`<tbody><tr class="admin-divider"><td colspan="6">Possibly obsolete</td></tr>${obsoleteRows}</tbody>`:""}
+        </table></div>
+      </section>`;
+    }).join("");
+    const unclassifiableNote = r.unclassifiable.length
+      ? `<div class="hint" style="margin:8px 0">${r.unclassifiable.length} row(s) in the file had no recognizable Document No. in their Topic text and couldn't be matched or classified — not applied, and not counted above: ${r.unclassifiable.slice(0,8).map(u=>esc(truncate(u.topic,40))).join('; ')}${r.unclassifiable.length>8?'…':''}</div>`
+      : "";
+    return `
+      <div class="backbar"><button class="link" id="cancelPlanImportReview">&larr; Cancel, don't apply anything</button></div>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Review plan revision — "${esc(r.filename)}"</h2>
+          <div class="meta">${totalAdded} new &nbsp;·&nbsp; ${totalChanged} changed &nbsp;·&nbsp; ${totalObsolete} possibly obsolete, across ${curriculaWithChanges.length} curricula &nbsp;·&nbsp; ${includedCount} selected to apply</div>
+        </div>
+        <div class="people-toolbar">
+          <span class="hint">Nothing is saved yet. Uncheck anything you don't want applied, adjust a new course's Phase/Week/Bucket if the automatic guess is wrong, then pick an effective date and scope below and click Apply — same effective-date/scope choice as any other course edit.</span>
+        </div>
+        ${curriculaWithChanges.length===0 ? `<div class="empty-state">No differences found — every curriculum in this file already matches what's on record.</div>` : ""}
+        ${unclassifiableNote}
+      </section>
+      ${sections}
+      ${curriculaWithChanges.length ? `<div class="admin-pending-bar">
+        <span class="admin-pending-count">${includedCount} change${includedCount===1?'':'s'} selected</span>
+        <label for="planImportEffectiveDate">Effective date:</label>
+        ${dateEditHtml('id="planImportEffectiveDate"', toISO(new Date()))}
+        <select id="planImportScope">
+          <option value="everyone">Apply to everyone now, including people already in training</option>
+          <option value="newcomers">Apply to newcomers starting on/after this date only</option>
+        </select>
+        <button class="btn primary" id="applyPlanImportBtn" ${includedCount===0?'disabled':''}>Apply ${includedCount} change${includedCount===1?'':'s'}</button>
+        <button class="btn" id="cancelPlanImportReview2">Cancel</button>
+      </div>` : ""}
+    `;
+  }
   function renderAdminView(){
     const key = adminCourseKey;
     const positionKey = POSITION_ORDER.find(pk=>POSITIONS[pk].courseKey===key);
@@ -2159,17 +2548,18 @@
         </td>
         <td>${adminPhaseWeekCol(it)}</td>
         <td>${it._pending ? '<span class="flag-chip progress">Pending</span>' : (active ? '<span class="flag-chip ontrack">Active</span>' : '<span class="flag-chip none">Inactive</span>')}</td>
-        <td>${it.custom
-          ? `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start">
-               <button class="btn small ${adminRemoveConfirmId===it.id?'danger-confirm':''}" data-admin-remove="${esc(it.id)}" title="${customPositionKeys.length>1?esc('Removes this course everywhere it applies: '+customPositionKeys.map(k=>COURSE_KEY_LABELS[k]).join(', ')):'Removes this course'}">${adminRemoveConfirmId===it.id?(customPositionKeys.length>1?'Click again — removes everywhere':'Click again'):'Remove'}</button>
+        <td style="display:flex;flex-direction:column;gap:3px;align-items:flex-start">
+          <button class="btn small" data-admin-edit-open="${esc(it.code)}">${adminEditRowCode===normCode(it.code)?'Editing…':'Edit'}</button>
+          ${it.custom
+            ? `<button class="btn small ${adminRemoveConfirmId===it.id?'danger-confirm':''}" data-admin-remove="${esc(it.id)}" title="${customPositionKeys.length>1?esc('Removes this course everywhere it applies: '+customPositionKeys.map(k=>COURSE_KEY_LABELS[k]).join(', ')):'Removes this course'}">${adminRemoveConfirmId===it.id?(customPositionKeys.length>1?'Click again — removes everywhere':'Click again'):'Remove'}</button>
                ${customPositionKeys.length>1
                  ? `<button class="btn small" style="font-size:10.5px;padding:1px 6px;opacity:.8" data-admin-remove-here="${esc(it.id)}" title="${esc('Keeps this course for the other curricula it applies to ('+customPositionKeys.filter(k=>k!==adminCourseKey).map(k=>COURSE_KEY_LABELS[k]).join(', ')+') — only stops it here')}">${adminRemoveHereConfirmId===it.id?'Click again':'Only remove from '+esc(COURSE_KEY_LABELS[adminCourseKey])}</button>`
-                 : ""}
-             </div>`
-          : `<button class="btn small" data-admin-toggle="${esc(it.id)}" data-admin-active="${active?'true':'false'}">${active?'Deactivate':'Reactivate'}</button>`}
+                 : ""}`
+            : `<button class="btn small" data-admin-toggle="${esc(it.id)}" data-admin-active="${active?'true':'false'}">${active?'Deactivate':'Reactivate'}</button>`}
         </td>
       </tr>`;
-      return divider + row;
+      const editPanel = adminEditRowCode===normCode(it.code) ? renderAdminEditPanel(it, key) : "";
+      return divider + row + editPanel;
     }).join("");
     return `
       <div class="backbar"><button class="link" id="backToDashFromAdmin">&larr; Back to dashboard</button></div>
@@ -2182,9 +2572,12 @@
           <div class="meta">${sharedPositions.length>1?`Shared position group — used by: ${sharedPositions.map(esc).join(', ')}. &nbsp;·&nbsp; `:''}${meta.p1Count+meta.p2Count+meta.p4Count} active course(s), as of today &nbsp;·&nbsp; Phase 2 currently spans ${meta.weeksP2} week(s) at ${HOURS_PER_WEEK}h/week</div>
         </div>
         <div class="people-toolbar">
-          <span class="hint">A "Shared ×N" badge under a code means that course is one record used by N other curricula too (hover for which) — editing its topic/type/hours/trainer here updates it everywhere; phase/week/active stay per-curriculum. Field edits and deactivate/reactivate are staged below until you set an effective date and apply them.</span>
+          <span class="hint">A "Shared ×N" badge under a code means that course is one record used by N other curricula too (hover for which) — editing its topic/type/hours/trainer here updates it everywhere; phase/week/active stay per-curriculum. Field edits and deactivate/reactivate are staged below until you set an effective date and apply them. Click Edit on any row to also set which curricula it applies to.</span>
           <button class="btn primary" id="toggleAdminAdd">${adminAddOpen?'Close':'+ Add supplemental course'}</button>
+          <button class="btn" id="openPlanImport" title="Read a new revision of CL-D-1000-0001 (the Functional Training Plan) and review what changed before applying anything — new courses, changed topic/hours/trainer, and courses no longer in the file.">Import plan revision (CL-D-1000-0001)</button>
+          <input type="file" id="planImportFile" accept=".xlsx,.xls" style="display:none">
         </div>
+        ${planImportError ? `<div class="hint" style="padding:8px 12px;margin:0 0 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2, rgba(0,0,0,.03));color:#b91c1c">${esc(planImportError)}</div>` : ""}
         ${renderAdminAddForm()}
         ${renderAdminPendingBar()}
         <div class="gantt-scroll"><table class="people admin-table">
@@ -3107,13 +3500,15 @@
       ? STATE.people[selectedPersonId].name + " — Onboarding"
       : view==="admin" ? "Manage Training Courses"
       : view==="methods-admin" ? "Manage Test Methods"
+      : view==="plan-import-review" ? "Review Plan Revision"
       : "Olefins Section — Onboarding & Qualification";
     document.getElementById("pageSubtitle").textContent = view==="person"
       ? "Source: CL-D-1000-0001 Functional Training Plan for Olefins (Rev 1.1)"
       : view==="admin" ? "Add, edit, or retire courses — shared across positions where the same course applies, with a dated, scoped effective date for each change"
       : view==="methods-admin" ? "Source: CL-D-1000-0010 Competency evaluation list for testing method (Rev.08)"
+      : view==="plan-import-review" ? "Nothing is saved until you click Apply below"
       : "Section-wide onboarding dashboard — Section Manager, Supervisor (SS), Lead/Senior Engineer, and Gas/Oil/Utility Analysts";
-    document.getElementById("root").innerHTML = view==="person" ? renderPersonView() : view==="admin" ? renderAdminView() : view==="methods-admin" ? renderMethodsAdminView() : renderDashboard();
+    document.getElementById("root").innerHTML = view==="person" ? renderPersonView() : view==="admin" ? renderAdminView() : view==="methods-admin" ? renderMethodsAdminView() : view==="plan-import-review" ? renderPlanImportReviewView() : renderDashboard();
     document.getElementById("footNote").innerHTML = footNote();
     attachHandlers();
   }
@@ -3264,6 +3659,39 @@
       const backAdminBtn = document.getElementById("backToDashFromAdmin");
       if(backAdminBtn) backAdminBtn.addEventListener("click", ()=>{ view="dashboard"; paint(); });
 
+      // v3.20 — plan-revision import entry point: read the file, build the diff, and hand off to the
+      // dedicated review screen. Reading/parsing never writes to STATE — only Apply on that screen does.
+      const openPlanImportBtn = document.getElementById("openPlanImport");
+      const planImportFileInput = document.getElementById("planImportFile");
+      if(openPlanImportBtn && planImportFileInput) openPlanImportBtn.addEventListener("click", ()=>{ planImportFileInput.click(); });
+      if(planImportFileInput) planImportFileInput.addEventListener("change", ()=>{
+        const file = planImportFileInput.files && planImportFileInput.files[0];
+        planImportFileInput.value = "";
+        if(!file) return;
+        const reader = new FileReader();
+        reader.onload = (e)=>{
+          try{
+            const data = new Uint8Array(e.target.result);
+            const wb = XLSX.read(data, { type:"array" });
+            const { bySheet, skippedSheets } = parsePlanRevisionWorkbook(wb);
+            if(Object.keys(bySheet).length===0){
+              planImportError = `Could not find any recognizable position sheet in "${file.name}" (expected SM/SS/ENG/Gas Analyst/Oil Analyst/Utility Analyst). ${skippedSheets.length?('Sheets found: '+skippedSheets.join(', ')+'.'):''}`;
+              paint();
+              return;
+            }
+            const { perCurriculum, unclassifiable } = buildPlanRevisionDiff(bySheet);
+            planImportError = "";
+            planImportReview = { filename: file.name, perCurriculum, unclassifiable, excluded: new Set(), addedOverrides: new Map() };
+            view = "plan-import-review";
+            paint();
+          } catch(err){
+            planImportError = `Could not read "${file.name}": ${err && err.message ? err.message : err}`;
+            paint();
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      });
+
       root.querySelectorAll("[data-admin-tab]").forEach(tab=>{
         tab.addEventListener("click", ()=>{
           adminCourseKey = tab.getAttribute("data-admin-tab");
@@ -3368,6 +3796,65 @@
         });
       });
 
+      // v3.20 — the Edit panel (Trainer/Eval. method/Applies-to). Opening/closing it never discards
+      // anything already staged — it's purely which panel is visually expanded right now.
+      root.querySelectorAll("[data-admin-edit-open]").forEach(btn=>{
+        btn.addEventListener("click", ()=>{
+          const code = btn.getAttribute("data-admin-edit-open");
+          const norm = normCode(code);
+          adminEditRowCode = (adminEditRowCode===norm) ? null : norm;
+          paint();
+        });
+      });
+      root.querySelectorAll("[data-admin-edit-done]").forEach(btn=>{
+        btn.addEventListener("click", ()=>{ adminEditRowCode = null; paint(); });
+      });
+      root.querySelectorAll("tr[data-admin-edit-root]").forEach(panel=>{
+        const norm = panel.getAttribute("data-admin-edit-root");
+        // Shared fields (trainer/evalMethod) — same code, courseKey argument unused for these.
+        panel.querySelectorAll("[data-admin-edit-field]").forEach(el=>{
+          el.addEventListener("change", ()=>{
+            const field = el.getAttribute("data-admin-edit-field");
+            stageEdit(adminPending, norm, adminCourseKey, field, el.value);
+            paint();
+          });
+        });
+        // Per-curriculum controls (Applies-to checkbox, Phase, Week/Bucket) — each row targets its OWN
+        // curriculum key, not necessarily the one currently open on screen.
+        panel.querySelectorAll("[data-admin-edit-curriculum-field]").forEach(el=>{
+          el.addEventListener("change", ()=>{
+            const ck = el.getAttribute("data-curriculum");
+            const field = el.getAttribute("data-admin-edit-curriculum-field");
+            let value = el.value;
+            if(field==="week") value = Math.max(1, Number(value)||1);
+            stageEdit(adminPending, norm, ck, field, value);
+            paint();
+          });
+        });
+        panel.querySelectorAll("[data-admin-edit-applies]").forEach(el=>{
+          el.addEventListener("change", ()=>{
+            const ck = el.getAttribute("data-admin-edit-applies");
+            stageEdit(adminPending, norm, ck, "appliesOverride", el.checked);
+            // Checking the box alone must be enough — seed this curriculum's Phase/Week-or-Bucket from
+            // whatever's currently shown in its own row (the pre-filled default, or whatever the admin
+            // already adjusted) rather than leaving it unset if they never touch those fields directly.
+            if(el.checked){
+              const curriculumRow = el.closest("tr[data-admin-edit-curriculum]");
+              const phaseSel = curriculumRow && curriculumRow.querySelector('[data-admin-edit-curriculum-field="phaseKey"]');
+              const weekOrBucket = curriculumRow && curriculumRow.querySelector('[data-admin-edit-curriculum-field="week"], [data-admin-edit-curriculum-field="postLabel"]');
+              if(phaseSel) stageEdit(adminPending, norm, ck, "phaseKey", phaseSel.value);
+              if(weekOrBucket){
+                const f = weekOrBucket.getAttribute("data-admin-edit-curriculum-field");
+                let v = weekOrBucket.value;
+                if(f==="week") v = Math.max(1, Number(v)||1);
+                stageEdit(adminPending, norm, ck, f, v);
+              }
+            }
+            paint();
+          });
+        });
+      });
+
       const applyPendingBtn = document.getElementById("applyPendingBtn");
       if(applyPendingBtn) applyPendingBtn.addEventListener("click", ()=>{
         const effEl = document.getElementById("pendingEffectiveDate");
@@ -3428,6 +3915,116 @@
           }
           paint();
         });
+      });
+    } else if(view==="plan-import-review"){
+      const cancelReviewBtns = [document.getElementById("cancelPlanImportReview"), document.getElementById("cancelPlanImportReview2")];
+      cancelReviewBtns.forEach(btn=>{
+        if(btn) btn.addEventListener("click", ()=>{ planImportReview = null; view = "admin"; paint(); });
+      });
+
+      root.querySelectorAll("[data-plan-review-toggle]").forEach(chk=>{
+        chk.addEventListener("change", ()=>{
+          const key = chk.getAttribute("data-plan-review-toggle");
+          if(chk.checked) planImportReview.excluded.delete(key); else planImportReview.excluded.add(key);
+          paint();
+        });
+      });
+
+      root.querySelectorAll("[data-plan-added-field]").forEach(el=>{
+        el.addEventListener("change", ()=>{
+          const field = el.getAttribute("data-plan-added-field");
+          const key = el.getAttribute("data-key");
+          const existing = Object.assign({}, planImportReview.addedOverrides.get(key) || {});
+          let value = el.value;
+          if(field==="week") value = Math.max(1, Number(value)||1);
+          existing[field] = value;
+          planImportReview.addedOverrides.set(key, existing);
+          paint();
+        });
+      });
+
+      const applyPlanImportBtn = document.getElementById("applyPlanImportBtn");
+      if(applyPlanImportBtn) applyPlanImportBtn.addEventListener("click", ()=>{
+        const r = planImportReview;
+        if(!r) return;
+        const effEl = document.getElementById("planImportEffectiveDate");
+        const scopeEl = document.getElementById("planImportScope");
+        const effectiveDate = (effEl && effEl.value) || toISO(new Date());
+        const scope = scopeEl ? scopeEl.value : "everyone";
+        const isExcluded = (k)=>r.excluded.has(k);
+        const curriculaWithChanges = COURSE_KEY_ORDER.filter(ck=>r.perCurriculum[ck]);
+
+        // 1) Added courses — the same new Document No. can show up as "added" in more than one
+        // curriculum's sheet at once (a brand-new course taught to several positions). Dedupe by doc
+        // code into a single STATE.customCourses entry with one "Applies to" map, exactly like adding
+        // one course via the Add-course form and checking every applicable position's box, rather than
+        // several near-duplicate entries with the same code.
+        const addedByDoc = new Map();
+        curriculaWithChanges.forEach(ck=>{
+          r.perCurriculum[ck].added.forEach(a=>{
+            const key = `${ck}|added|${a.doc}`;
+            if(isExcluded(key)) return;
+            const ov = r.addedOverrides.get(`${ck}|${a.doc}`) || {};
+            const phaseKey = ov.phaseKey || a.phaseKey;
+            const week = phaseKey==="p4" ? 0 : Math.max(1, Number(ov.week!=null?ov.week:1)||1);
+            const postLabel = phaseKey==="p4" ? (ov.postLabel!=null?ov.postLabel:"") : "";
+            if(!addedByDoc.has(a.doc)){
+              addedByDoc.set(a.doc, {
+                labCode: a.labCode, topic: a.topic, type: a.type, hours: a.hours,
+                trainer: a.trainer||"", evalMethod: a.evalMethod||"", positions: {},
+              });
+            }
+            addedByDoc.get(a.doc).positions[ck] = { phaseKey, week, postLabel, active:true };
+          });
+        });
+        if(addedByDoc.size){
+          if(!STATE.customCourses) STATE.customCourses = [];
+          let seq = 0;
+          addedByDoc.forEach(entry=>{
+            // Guard against a code collision (e.g. re-running an import, or a code already added by
+            // hand) — skip rather than silently create a duplicate; the admin can add it manually if
+            // this was actually intentional.
+            const codeRaw = entry.labCode.replace(/\s*\(\*\)\s*$/,"").trim();
+            if(!codeRaw || allExistingCourseCodes().has(normCode(codeRaw))) return;
+            const anyPos = Object.values(entry.positions)[0] || {};
+            const code = anyPos.phaseKey==="p2" ? codeRaw+" (*)" : codeRaw;
+            const id = "custom-" + Date.now().toString(36) + Math.floor(Math.random()*1000) + (seq++);
+            const no = 9000 + (STATE.customCourses||[]).length;
+            STATE.customCourses.push({
+              id, no, code, topic: entry.topic, type: entry.type, hours: entry.hours,
+              trainer: entry.trainer, evalMethod: entry.evalMethod || (entry.type==="Document"?"WT":"OJE"),
+              positions: entry.positions, effectiveDate, scope,
+            });
+          });
+        }
+
+        // 2) Changed + obsolete courses — staged through the existing dated/scoped revision pipeline,
+        // sharing this one effective-date + scope choice. A detected Lab-code diff (fieldDiffs.code) is
+        // informational only (see the note under each Changed row) and is deliberately never staged
+        // here — Code stays read-only, same as the per-row Edit panel.
+        const pending = {};
+        curriculaWithChanges.forEach(ck=>{
+          const d = r.perCurriculum[ck];
+          d.changed.forEach(c=>{
+            const key = `${ck}|changed|${c.doc}`;
+            if(isExcluded(key)) return;
+            Object.keys(c.fieldDiffs).forEach(f=>{
+              if(f==="code") return;
+              stageEdit(pending, c.code, ck, f, c.fieldDiffs[f].to);
+            });
+          });
+          d.obsolete.forEach(o=>{
+            const key = `${ck}|obsolete|${o.doc}`;
+            if(isExcluded(key)) return;
+            stageEdit(pending, o.code, ck, "active", false);
+          });
+        });
+        commitPendingEdits(pending, effectiveDate, scope);
+
+        scheduleSave();
+        planImportReview = null;
+        view = "admin";
+        paint();
       });
     } else if(view==="methods-admin"){
       const backMethodsAdminBtn = document.getElementById("backToDashFromMethodsAdmin");
