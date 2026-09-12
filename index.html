@@ -559,6 +559,34 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
 
   let view = "dashboard";       // "dashboard" | "person" | "admin" | "methods-admin"
   let selectedPersonId = null;
+    // v3.23 — person-page draft editing.
+  // The original record remains unchanged until the user explicitly saves.
+  let personPageOriginal = null;
+  let personPageDraft = null;
+  let personPageDirty = false;
+  let personPageSaveInProgress = false;
+
+  function clonePersonPageData(value){
+    return value == null ? value : JSON.parse(JSON.stringify(value));
+  }
+
+  function beginPersonPageDraft(personId){
+    const person = STATE.people[personId];
+    if(!person) return false;
+
+    personPageOriginal = clonePersonPageData(person);
+    personPageDraft = clonePersonPageData(person);
+    personPageDirty = false;
+    personPageSaveInProgress = false;
+    return true;
+  }
+
+  function clearPersonPageDraft(){
+    personPageOriginal = null;
+    personPageDraft = null;
+    personPageDirty = false;
+    personPageSaveInProgress = false;
+  }
   let addFormOpen = false;
   let removeConfirmId = null;   // person id currently showing "click again to remove"
   let dashFilters = { position: "all", flag: "all", search: "", employment: "active", personStatus: "all", methods: "all" };
