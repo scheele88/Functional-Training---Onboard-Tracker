@@ -4923,7 +4923,13 @@ function applyRouteFromHash(){
   view = targetView;
   paint();
 }
-window.addEventListener("hashchange", applyRouteFromHash);
+  window.addEventListener("beforeunload", event=>{
+    if(view==="person" && personPageDirty){
+      event.preventDefault();
+      event.returnValue = "";
+    }
+  });
+  window.addEventListener("hashchange", applyRouteFromHash);
   const openPwdSetBtn = document.getElementById("openPwdSet");
   if(openPwdSetBtn) openPwdSetBtn.addEventListener("click", openPwdSetModal);
   // v3.7 — dashboard-level bulk Excel import (static shell, wired once — see comment above). No
