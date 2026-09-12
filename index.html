@@ -170,6 +170,7 @@
   .btn.primary:hover{ filter:brightness(1.07); }
   .btn.danger-confirm{ background:var(--overdue-soft); color:var(--overdue-ink); border-color:transparent; }
   .btn.small{ padding:5px 10px; font-size:12px; }
+  a.btn{ text-decoration:none; display:inline-flex; align-items:center; }
 
   .add-form{ display:none; gap:10px; padding:14px 18px; border-bottom:1px solid var(--border); background:var(--surface-2); flex-wrap:wrap; align-items:end; }
   .add-form.open{ display:flex; }
@@ -424,8 +425,8 @@
         <option value="test">Test methods only</option>
       </select>
       <button class="btn small dash-only-action" id="openExportReport">Export report</button>
-      <button class="btn small dash-only-action" id="openAdmin">Manage courses</button>
-      <button class="btn small dash-only-action" id="openMethodsAdmin">Manage test methods</button>
+  <a href="#/manage-courses" class="btn small dash-only-action" id="openAdmin">Manage courses</a>
+<a href="#/manage-methods" class="btn small dash-only-action" id="openMethodsAdmin">Manage test methods</a>
       <button class="btn small dash-only-action" id="openDashMethodsImport" title="Bulk-update test-method Complete Date / Re-Training Date AND Planner/Schedule course status, for every matching person found in one Excel file — any position, not just Analysts">Import test results (Excel)</button>
       <input type="file" id="dashMethodsImportFile" accept=".xlsx,.xls" style="display:none">
       <button class="btn small dash-only-action" id="openPwdSet" title="Set or change the admin password">🔒</button>
@@ -4004,8 +4005,8 @@ async function buildAndDownloadExcelReport(){
       const clearSelBtn = document.getElementById("clearSelection");
       if(clearSelBtn) clearSelBtn.addEventListener("click", ()=>{ selectedPeopleIds.clear(); paint(); });
     } else if(view==="admin"){
-      const backAdminBtn = document.getElementById("backToDashFromAdmin");
-      if(backAdminBtn) backAdminBtn.addEventListener("click", ()=>{ view="dashboard"; paint(); });
+     const backAdminBtn = document.getElementById("backToDashFromAdmin");
+if(backAdminBtn) backAdminBtn.addEventListener("click", ()=>{ location.hash = "#/"; });
 
       // v3.20 — plan-revision import entry point: read the file, build the diff, and hand off to the
       // dedicated review screen. Reading/parsing never writes to STATE — only Apply on that screen does.
@@ -4376,7 +4377,7 @@ async function buildAndDownloadExcelReport(){
       });
     } else if(view==="methods-admin"){
       const backMethodsAdminBtn = document.getElementById("backToDashFromMethodsAdmin");
-      if(backMethodsAdminBtn) backMethodsAdminBtn.addEventListener("click", ()=>{ view="dashboard"; paint(); });
+if(backMethodsAdminBtn) backMethodsAdminBtn.addEventListener("click", ()=>{ location.hash = "#/"; });
 
       const methodsSearchEl = document.getElementById("methodsAdminSearch");
       if(methodsSearchEl) methodsSearchEl.addEventListener("change", ()=>{ methodsAdminSearch = methodsSearchEl.value.trim(); paint(); });
@@ -4751,18 +4752,28 @@ async function buildAndDownloadExcelReport(){
 
   // Lives in the static page shell (outside #root, so it's never recreated by paint()) — wired once here
   // rather than inside attachHandlers(), which would otherwise stack a duplicate listener on every repaint.
-  const openAdminBtn = document.getElementById("openAdmin");
-  if(openAdminBtn) openAdminBtn.addEventListener("click", ()=>{
-    pendingAdminView = "admin";
-    if(ADMIN_PWD_HASH && sessionStorage.getItem(ADMIN_SESSION_KEY)!=="1"){ showAdminGate(); return; }
-    view="admin"; adminAddOpen=false; adminRemoveConfirmId=null; adminRemoveHereConfirmId=null; paint();
-  });
-  const openMethodsAdminBtn = document.getElementById("openMethodsAdmin");
-  if(openMethodsAdminBtn) openMethodsAdminBtn.addEventListener("click", ()=>{
-    pendingAdminView = "methods-admin";
-    if(ADMIN_PWD_HASH && sessionStorage.getItem(ADMIN_SESSION_KEY)!=="1"){ showAdminGate(); return; }
-    view="methods-admin"; methodsAdminAddOpen=false; paint();
-  });
+  // ---------- URL routing: Manage courses / Manage test methods get their own real, shareable
+// URLs. Hash-based ("#/...") is the safe choice for a plain static GitHub Pages site with no
+// server-side routing config. Ctrl+click / middle-click on their links opens a genuine new tab;
+// the browser's own Back/Forward buttons work via the standard "hashchange" event below.
+const ROUTES = { "#/manage-courses": "admin", "#/manage-methods": "methods-admin" };
+function applyRouteFromHash(){
+  const targetView = ROUTES[location.hash] || "dashboard";
+  if(targetView==="admin" || targetView==="methods-admin"){
+    pendingAdminView = targetView;
+    if(ADMIN_PWD_HASH && sessionStorage.getItem(ADMIN_SESSION_KEY)!=="1"){
+      view = "dashboard";
+      paint();
+      showAdminGate();
+      return;
+    }
+    if(targetView==="admin"){ adminAddOpen=false; adminRemoveConfirmId=null; adminRemoveHereConfirmId=null; }
+    if(targetView==="methods-admin"){ methodsAdminAddOpen=false; }
+  }
+  view = targetView;
+  paint();
+}
+window.addEventListener("hashchange", applyRouteFromHash);
   const openPwdSetBtn = document.getElementById("openPwdSet");
   if(openPwdSetBtn) openPwdSetBtn.addEventListener("click", openPwdSetModal);
   // v3.7 — dashboard-level bulk Excel import (static shell, wired once — see comment above). No
@@ -4780,8 +4791,11 @@ async function buildAndDownloadExcelReport(){
   // Admin gate + password-set modal controls (static shell, wired once — see comment above).
   const admGatePwdInp = document.getElementById("admGatePwd");
   if(admGatePwdInp) admGatePwdInp.addEventListener("keydown", (e)=>{ if(e.key==="Enter") verifyAdminGate(); });
-  const admGateCancelBtn = document.getElementById("admGateCancel");
-  if(admGateCancelBtn) admGateCancelBtn.addEventListener("click", hideAdminGate);
+ const admGateCancelBtn = document.getElementById("admGateCancel");
+if(admGateCancelBtn) admGateCancelBtn.addEventListener("click", ()=>{
+  hideAdminGate();
+  if(ROUTES[location.hash]) location.hash = "#/";
+});
   const admGateUnlockBtn = document.getElementById("admGateUnlock");
   if(admGateUnlockBtn) admGateUnlockBtn.addEventListener("click", verifyAdminGate);
   const pwdSetCancelBtn = document.getElementById("pwdSetCancel");
@@ -4808,11 +4822,11 @@ async function buildAndDownloadExcelReport(){
   const exportReportGenerateBtn = document.getElementById("exportReportGenerate");
   if(exportReportGenerateBtn) exportReportGenerateBtn.addEventListener("click", generateExportReport);
 
-  (async function boot(){
-    const ok = await loadFromSupabase();
-    paint();
-    if(!ok) return;
-  })();
+ (async function boot(){
+  const ok = await loadFromSupabase();
+  applyRouteFromHash();
+  if(!ok) return;
+})();
 })();
 </script>
 </body>
