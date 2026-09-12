@@ -611,13 +611,47 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
     personPageDirty = true;
   }
 
-  function updatePersonPageDraftFromState(){
+    function updatePersonPageDraftFromState(){
     if(view!=="person" || !selectedPersonId) return;
 
     if(!beginPersonPageDraft(selectedPersonId)){
       clearPersonPageDraft();
     }
   }
+
+  async function saveCurrentPersonChanges(){
+    const person = activePersonPage();
+    if(!person || !db || personPageSaveInProgress) return false;
+
+    personPageSaveInProgress = true;
+    paint();
+
+    try{
+      const { error } = await db
+        .from("onb_people")
+        .upsert([personRow(personPageDraftId, person)]);
+
+      if(error) throw error;
+
+      STATE.people[personPageDraftId] = clonePersonPageData(person);
+      personPageOriginal = clonePersonPageData(person);
+      personPageDraft = clonePersonPageData(person);
+      personPageDirty = false;
+      personPageSaveInProgress = false;
+
+      setSaveChip("saved");
+      paint();
+      return true;
+    }catch(error){
+      console.error("save person changes failed", error);
+      personPageSaveInProgress = false;
+      setSaveChip("error");
+      paint();
+      alert("The person changes could not be saved. Please try again.");
+      return false;
+    }
+  }
+
   let addFormOpen = false;
   let removeConfirmId = null;   // person id currently showing "click again to remove"
   let dashFilters = { position: "all", flag: "all", search: "", employment: "active", personStatus: "all", methods: "all" };
