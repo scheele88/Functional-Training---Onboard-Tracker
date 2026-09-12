@@ -562,6 +562,7 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
     // v3.23 — person-page draft editing.
   // The original record remains unchanged until the user explicitly saves.
   let personPageOriginal = null;
+    let personPageDraftId = null;
   let personPageDraft = null;
   let personPageDirty = false;
   let personPageSaveInProgress = false;
@@ -574,6 +575,7 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
     const person = STATE.people[personId];
     if(!person) return false;
 
+    personPageDraftId = personId;
     personPageOriginal = clonePersonPageData(person);
     personPageDraft = clonePersonPageData(person);
     personPageDirty = false;
@@ -582,6 +584,7 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
   }
 
   function clearPersonPageDraft(){
+    personPageDraftId = null;
     personPageOriginal = null;
     personPageDraft = null;
     personPageDirty = false;
@@ -3190,6 +3193,24 @@ async function buildAndDownloadExcelReport(){
     return out.join("");
   }
 
+    function renderPersonSaveBar(){
+    const disabled = personPageDirty && !personPageSaveInProgress ? "" : " disabled";
+    const discardDisabled = personPageDirty && !personPageSaveInProgress ? "" : " disabled";
+    const statusText = personPageSaveInProgress
+      ? "Saving changes…"
+      : personPageDirty
+        ? "Unsaved changes"
+        : "No unsaved changes";
+
+    return `
+      <div class="startdate-row person-save-bar" style="border-top:none">
+        <button class="btn primary" id="savePersonChanges"${disabled}>Save Changes</button>
+        <button class="btn" id="discardPersonChanges"${discardDisabled}>Discard Changes</button>
+        <span class="hint" id="personSaveStatus">${statusText}</span>
+      </div>
+    `;
+  }
+
   function renderPersonView(){
     const person = STATE.people[selectedPersonId];
     if(!person){ view="dashboard"; return renderDashboard(); }
@@ -3239,7 +3260,8 @@ async function buildAndDownloadExcelReport(){
           </table>
         </div>` : '';
     return `
-      <div class="backbar"><button class="link" id="backToDash">&larr; All people</button>${isActive(person)?'':`<span class="flag-chip resigned">Left${person.endDate?' '+esc(fmtDate(parseISO(person.endDate))):''} — excluded from section statistics</span>`}</div>
+            <div class="backbar"><button class="link" id="backToDash">&larr; All people</button>${isActive(person)?'':`<span class="flag-chip resigned">Left${person.endDate?' '+esc(fmtDate(parseISO(person.endDate))):''} — excluded from section statistics</span>`}</div>
+      ${renderPersonSaveBar()}
       <div class="tiles">
         <div class="tile ring-tile">
           ${ringSVG(pr.pct,56,7,"var(--accent)")}
