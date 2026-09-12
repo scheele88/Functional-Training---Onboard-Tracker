@@ -567,7 +567,7 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
   let personPageDirty = false;
   let personPageSaveInProgress = false;
 
-  function clonePersonPageData(value){
+    function clonePersonPageData(value){
     return value == null ? value : JSON.parse(JSON.stringify(value));
   }
 
@@ -584,7 +584,14 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
   }
 
   function clearPersonPageDraft(){
-      function activePersonPage(){
+    personPageDraftId = null;
+    personPageOriginal = null;
+    personPageDraft = null;
+    personPageDirty = false;
+    personPageSaveInProgress = false;
+  }
+
+  function activePersonPage(){
     if(view!=="person") return null;
     if(!personPageDraft) return null;
     if(personPageDraftId!==selectedPersonId) return null;
@@ -606,15 +613,10 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
 
   function updatePersonPageDraftFromState(){
     if(view!=="person" || !selectedPersonId) return;
+
     if(!beginPersonPageDraft(selectedPersonId)){
       clearPersonPageDraft();
     }
-  }
-    personPageDraftId = null;
-    personPageOriginal = null;
-    personPageDraft = null;
-    personPageDirty = false;
-    personPageSaveInProgress = false;
   }
   let addFormOpen = false;
   let removeConfirmId = null;   // person id currently showing "click again to remove"
