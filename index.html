@@ -191,8 +191,9 @@
   table.people td{ padding:10px 14px; border-bottom:1px solid var(--border); vertical-align:middle; font-size:13px; }
   table.people th.chk-col, table.people td.chk-col{ width:32px; padding-right:0; }
   table.people tr:hover td{ background:var(--surface-2); }
-  table.people td.name{ font-weight:600; cursor:pointer; }
-  table.people td.name:hover{ color:var(--accent); }
+  table.people td.name{ font-weight:600; }
+table.people td.name a.person-link{ color:inherit; text-decoration:none; cursor:pointer; }
+table.people td.name a.person-link:hover{ color:var(--accent); }
   .pos-pill{ font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; background:var(--surface-3); color:var(--ink-muted); white-space:nowrap; }
   .progress-cell{ display:flex; align-items:center; gap:8px; min-width:130px; }
   .progress-cell .pbar{ flex:1; height:7px; border-radius:4px; background:var(--surface-3); overflow:hidden; }
@@ -2306,7 +2307,7 @@ async function buildAndDownloadExcelReport(){
       <div class="gantt-scroll"><table class="people">
         <thead><tr><th>Person</th><th>Position</th><th>Course</th><th>Target date</th></tr></thead>
         <tbody>${rows.map(r=>`<tr>
-          <td class="name" data-open="${r.personId}">${esc(r.personName)}</td>
+          <td class="name"><a class="person-link" href="#/person/${encodeURIComponent(r.personId)}">${esc(r.personName)}</a></td>
           <td>${posPill(r.positionKey, r.positionLabel)}</td>
           <td>${esc(r.item.topic)}<div class="mono" style="font-size:10.5px;color:var(--ink-faint);margin-top:2px">${esc(r.item.code)}</div></td>
           <td class="mono">${r.target?fmtDate(r.target):'—'}</td>
@@ -2490,7 +2491,7 @@ async function buildAndDownloadExcelReport(){
         const statusCell = `<span class="flag-chip status-${rStatus}">${esc(PERSON_STATUS_LABELS[rStatus])}</span>${p.statusOverride?' <span class="hint" style="font-size:11px">· manual</span>':''}${rStatus==='rotation'&&rotationFromTo(p)?`<div class="hint" style="font-size:11px">${esc(rotationFromTo(p))}</div>`:''}`;
         return `<tr${active?'':' class="row-resigned"'}>
           <td class="chk-col"><input type="checkbox" class="rowSelect" data-id="${p.id}" ${selectedPeopleIds.has(p.id)?'checked':''}></td>
-          <td class="name" data-open="${p.id}">${esc(p.name)}</td>
+          <td class="name"><a class="person-link" href="#/person/${encodeURIComponent(p.id)}">${esc(p.name)}</a></td>
           <td class="mono">${p.employeeId?esc(p.employeeId):'—'}</td>
           <td>${posPill(p.positionKey, POSITIONS[p.positionKey].label)}</td>
           <td class="mono">${p.startDate?esc(fmtDate(parseISO(p.startDate))):'—'}</td>
@@ -3920,15 +3921,7 @@ async function buildAndDownloadExcelReport(){
         scheduleSave();
         paint();
       });
-      root.querySelectorAll("td.name[data-open]").forEach(td=>{
-        td.addEventListener("click", ()=>{
-          selectedPersonId = td.getAttribute("data-open"); view="person";
-          personTab = "schedule";
-          personMethodsUi = { search: "", statusFilter: "all", openEvalForm: null, openHistory: new Set(), importMsg: "" };
-          paint();
-        });
-      });
-      root.querySelectorAll("button[data-remove]").forEach(btn=>{
+            root.querySelectorAll("button[data-remove]").forEach(btn=>{
         btn.addEventListener("click", ()=>{
           const id = btn.getAttribute("data-remove");
           if(removeConfirmId===id){
@@ -4544,7 +4537,7 @@ if(backMethodsAdminBtn) backMethodsAdminBtn.addEventListener("click", ()=>{ loca
       });
     } else {
       const backBtn = document.getElementById("backToDash");
-      if(backBtn) backBtn.addEventListener("click", ()=>{ view="dashboard"; removeConfirmId=null; paint(); });
+if(backBtn) backBtn.addEventListener("click", ()=>{ removeConfirmId=null; location.hash = "#/"; });
       // v3.7 — Planner/Schedule vs. Re-evaluation tabs (analyst positions only)
       root.querySelectorAll("[data-person-tab]").forEach(btn=>{
         btn.addEventListener("click", ()=>{
@@ -4756,9 +4749,34 @@ if(backMethodsAdminBtn) backMethodsAdminBtn.addEventListener("click", ()=>{ loca
 // URLs. Hash-based ("#/...") is the safe choice for a plain static GitHub Pages site with no
 // server-side routing config. Ctrl+click / middle-click on their links opens a genuine new tab;
 // the browser's own Back/Forward buttons work via the standard "hashchange" event below.
+// ---------- URL routing: Manage courses / Manage test methods / a person's own schedule page all
+// get their own real, shareable URLs. Hash-based ("#/...") is the safe choice for a plain static
+// GitHub Pages site with no server-side routing config. Ctrl+click / middle-click on their links
+// opens a genuine new tab; the browser's own Back/Forward buttons work via "hashchange" below.
 const ROUTES = { "#/manage-courses": "admin", "#/manage-methods": "methods-admin" };
+function parsePersonIdFromHash(hash){
+  const m = /^#\/person\/(.+)$/.exec(hash||"");
+  return m ? decodeURIComponent(m[1]) : null;
+}
 function applyRouteFromHash(){
-  const targetView = ROUTES[location.hash] || "dashboard";
+  const hash = location.hash;
+  const personId = parsePersonIdFromHash(hash);
+  if(personId){
+    if(!STATE.people[personId]){
+      // Unknown or removed person id in the URL — fall back to the dashboard instead of a blank page.
+      location.hash = "#/";
+      return;
+    }
+    if(selectedPersonId !== personId){
+      selectedPersonId = personId;
+      personTab = "schedule";
+      personMethodsUi = { search: "", statusFilter: "all", openEvalForm: null, openHistory: new Set(), importMsg: "" };
+    }
+    view = "person";
+    paint();
+    return;
+  }
+  const targetView = ROUTES[hash] || "dashboard";
   if(targetView==="admin" || targetView==="methods-admin"){
     pendingAdminView = targetView;
     if(ADMIN_PWD_HASH && sessionStorage.getItem(ADMIN_SESSION_KEY)!=="1"){
