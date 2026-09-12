@@ -4677,18 +4677,12 @@ if(employmentInput){
     paint();
   });
 }
-      const changePositionBtn = document.getElementById("changePositionBtn");
-      if(changePositionBtn) changePositionBtn.addEventListener("click", openPosChangeModal);
-      const employmentInput = document.getElementById("employmentInput");
-      if(employmentInput){
-        employmentInput.addEventListener("change", ()=>{
-          const person = STATE.people[selectedPersonId];
-          person.employmentStatus = employmentInput.value;
-          if(person.employmentStatus!=="resigned") person.endDate = "";
-          paint();
-          scheduleSave();
-        });
+            const changePositionBtn = document.getElementById("changePositionBtn");
+      if(changePositionBtn){
+        changePositionBtn.addEventListener("click", openPosChangeModal);
       }
+
+      
       const endDateInput = document.getElementById("endDateInput");
 if(endDateInput){
   endDateInput.addEventListener("change", ()=>{
