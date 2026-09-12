@@ -4775,13 +4775,21 @@ function parsePersonIdFromHash(hash){
 }
 function applyRouteFromHash(){
   const hash = location.hash;
+  if(view==="person" && personDirty && !suppressNextRouteGuard){
+    const currentPersonHash = "#/person/" + encodeURIComponent(selectedPersonId||"");
+    if(hash !== currentPersonHash){
+      if(!confirm("You have unsaved changes on this page. Leave without saving?")){
+        suppressNextRouteGuard = true;
+        location.hash = currentPersonHash;
+        return;
+      }
+      personDirty = false;
+    }
+  }
+  suppressNextRouteGuard = false;
   const personId = parsePersonIdFromHash(hash);
   if(personId){
-    if(!STATE.people[personId]){
-      // Unknown or removed person id in the URL — fall back to the dashboard instead of a blank page.
-      location.hash = "#/";
-      return;
-    }
+    if(!STATE.people[personId]){ location.hash = "#/"; return; }
     if(selectedPersonId !== personId){
       selectedPersonId = personId;
       personTab = "schedule";
@@ -4794,19 +4802,17 @@ function applyRouteFromHash(){
   const targetView = ROUTES[hash] || "dashboard";
   if(targetView==="admin" || targetView==="methods-admin"){
     pendingAdminView = targetView;
-    if(ADMIN_PWD_HASH && sessionStorage.getItem(ADMIN_SESSION_KEY)!=="1"){
-      view = "dashboard";
-      paint();
-      showAdminGate();
-      return;
-    }
+    if(ADMIN_PWD_HASH && sessionStorage.getItem(ADMIN_SESSION_KEY)!=="1"){ view="dashboard"; paint(); showAdminGate(); return; }
     if(targetView==="admin"){ adminAddOpen=false; adminRemoveConfirmId=null; adminRemoveHereConfirmId=null; }
     if(targetView==="methods-admin"){ methodsAdminAddOpen=false; }
   }
   view = targetView;
   paint();
 }
-window.addEventListener("hashchange", applyRouteFromHash);
+}
+window.addEventListener("hashchange", applyRouteFromHash);window.addEventListener("beforeunload", (e)=>{
+  if(personDirty){ e.preventDefault(); e.returnValue = ""; }
+});
   const openPwdSetBtn = document.getElementById("openPwdSet");
   if(openPwdSetBtn) openPwdSetBtn.addEventListener("click", openPwdSetModal);
   // v3.7 — dashboard-level bulk Excel import (static shell, wired once — see comment above). No
