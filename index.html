@@ -4810,7 +4810,8 @@ function applyRouteFromHash(){
   paint();
 }
 }
-window.addEventListener("hashchange", applyRouteFromHash);window.addEventListener("beforeunload", (e)=>{
+window.addEventListener("hashchange", applyRouteFromHash);
+  window.addEventListener("beforeunload", (e)=>{
   if(personDirty){ e.preventDefault(); e.returnValue = ""; }
 });
   const openPwdSetBtn = document.getElementById("openPwdSet");
