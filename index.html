@@ -573,8 +573,6 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
   let personMethodsUi = { search: "", statusFilter: "all", openEvalForm: null, openHistory: new Set(), importMsg: "" }; // v3.6/3.7/3.16 — per-person Courses + Test Methods panel state (second tab, incl. Excel-import result banner), reset when switching people
   let dashImportMsg = ""; // v3.7 — result banner for the dashboard-level (bulk, multi-person) Excel import
   let personTab = "schedule"; // v3.7 — "schedule" | "reeval", which tab a person's own page shows; reset when switching people
- let personDirty = false;
-let suppressNextRouteGuard = false;
   // v3.5 — "probation" | "full" | "test" — drives every section-wide % (tiles, position grid, People
   // table, Export Report). v3.12 — now persisted per-browser (localStorage), so it survives a page
   // reload instead of silently resetting to "probation" every time; this was the most likely reason a
@@ -3213,7 +3211,7 @@ async function buildAndDownloadExcelReport(){
           </table>
         </div>` : '';
     return `
-      <div class="backbar"><button class="link" id="backToDash">&larr; All people</button><button class="btn primary small" id="savePersonBtn" style="margin-left:10px" ${personDirty?'':'disabled'}>${personDirty?'Save changes':'Saved'}</button>${isActive(person)?'':`<span class="flag-chip resigned">Left${person.endDate?' '+esc(fmtDate(parseISO(person.endDate))):''} — excluded from section statistics</span>`}</div>
+      <div class="backbar"><button class="link" id="backToDash">&larr; All people</button>${isActive(person)?'':`<span class="flag-chip resigned">Left${person.endDate?' '+esc(fmtDate(parseISO(person.endDate))):''} — excluded from section statistics</span>`}</div>
       <div class="tiles">
         <div class="tile ring-tile">
           ${ringSVG(pr.pct,56,7,"var(--accent)")}
@@ -4538,21 +4536,8 @@ if(backMethodsAdminBtn) backMethodsAdminBtn.addEventListener("click", ()=>{ loca
         paint();
       });
     } else {
-     const backBtn = document.getElementById("backToDash");
-if(backBtn) backBtn.addEventListener("click", ()=>{
-  if(personDirty && !confirm("You have unsaved changes on this page. Leave without saving?")) return;
-  personDirty = false;
-  removeConfirmId=null; location.hash = "#/";
-});
-const savePersonBtn = document.getElementById("savePersonBtn");
-if(savePersonBtn) savePersonBtn.addEventListener("click", async ()=>{
-  if(!personDirty) return;
-  savePersonBtn.disabled = true;
-  savePersonBtn.textContent = "Saving…";
-  await persist();
-  personDirty = false;
-  paint();
-});
+      const backBtn = document.getElementById("backToDash");
+if(backBtn) backBtn.addEventListener("click", ()=>{ removeConfirmId=null; location.hash = "#/"; });
       // v3.7 — Planner/Schedule vs. Re-evaluation tabs (analyst positions only)
       root.querySelectorAll("[data-person-tab]").forEach(btn=>{
         btn.addEventListener("click", ()=>{
@@ -4565,7 +4550,7 @@ if(savePersonBtn) savePersonBtn.addEventListener("click", async ()=>{
         startInput.addEventListener("change", ()=>{
           STATE.people[selectedPersonId].startDate = startInput.value;
           paint();
-         personDirty = true;
+          scheduleSave();
         });
       }
       const nameInput = document.getElementById("nameInput");
@@ -4583,7 +4568,7 @@ if(savePersonBtn) savePersonBtn.addEventListener("click", async ()=>{
         empIdInput.addEventListener("change", ()=>{
           STATE.people[selectedPersonId].employeeId = empIdInput.value.trim();
           paint();
-          personDirty = true;
+          scheduleSave();
         });
       }
       const notesInput = document.getElementById("notesInput");
@@ -4591,7 +4576,7 @@ if(savePersonBtn) savePersonBtn.addEventListener("click", async ()=>{
         notesInput.addEventListener("change", ()=>{
           STATE.people[selectedPersonId].notes = notesInput.value.trim();
           paint();
-         personDirty = true;
+          scheduleSave();
         });
       }
       const changePositionBtn = document.getElementById("changePositionBtn");
@@ -4603,7 +4588,7 @@ if(savePersonBtn) savePersonBtn.addEventListener("click", async ()=>{
           person.employmentStatus = employmentInput.value;
           if(person.employmentStatus!=="resigned") person.endDate = "";
           paint();
-          personDirty = true;
+          scheduleSave();
         });
       }
       const endDateInput = document.getElementById("endDateInput");
@@ -4611,7 +4596,7 @@ if(savePersonBtn) savePersonBtn.addEventListener("click", async ()=>{
         endDateInput.addEventListener("change", ()=>{
           STATE.people[selectedPersonId].endDate = endDateInput.value;
           paint();
-          personDirty = true;
+          scheduleSave();
         });
       }
       const statusOverrideInput = document.getElementById("statusOverrideInput");
@@ -4619,7 +4604,7 @@ if(savePersonBtn) savePersonBtn.addEventListener("click", async ()=>{
         statusOverrideInput.addEventListener("change", ()=>{
           STATE.people[selectedPersonId].statusOverride = statusOverrideInput.value;
           paint();
-         personDirty = true;
+          scheduleSave();
         });
       }
       root.querySelectorAll('select[data-field="status"]').forEach(sel=>{
@@ -4631,7 +4616,7 @@ if(savePersonBtn) savePersonBtn.addEventListener("click", async ()=>{
           if(sel.value==="Passed" && !ist.actualDate) ist.actualDate = toISO(new Date());
           if(sel.value!=="Passed") ist.actualDate = "";
           paint();
-          personDirty = true;
+          scheduleSave();
         });
       });
       root.querySelectorAll('input[data-field="target"]').forEach(inp=>{
@@ -4641,7 +4626,7 @@ if(savePersonBtn) savePersonBtn.addEventListener("click", async ()=>{
           const ist = itemState(person, id);
           ist.planOverride = inp.value || "";
           paint();
-          personDirty = true;
+          scheduleSave();
         });
       });
       root.querySelectorAll('select[data-field="trainer"]').forEach(sel=>{
@@ -4651,7 +4636,7 @@ if(savePersonBtn) savePersonBtn.addEventListener("click", async ()=>{
           const ist = itemState(person, id);
           ist.trainerRole = sel.value;
           paint();
-         personDirty = true;
+          scheduleSave();
         });
       });
 
@@ -4677,7 +4662,7 @@ if(savePersonBtn) savePersonBtn.addEventListener("click", async ()=>{
             ist.status = "Not Started";
             ist.actualDate = "";
           }
-      personDirty = true;
+          scheduleSave();
           paint();
         });
       });
@@ -4707,7 +4692,7 @@ if(savePersonBtn) savePersonBtn.addEventListener("click", async ()=>{
           setMethodLastEvaluatedDate(person, mid, inp.value);
           const linkedCourse = findCourseByMethodCode(person, mid);
           if(linkedCourse) markCourseImported(person, linkedCourse, inp.value);
-        personDirty = true;
+          scheduleSave();
           paint();
         });
       });
@@ -4751,7 +4736,7 @@ if(savePersonBtn) savePersonBtn.addEventListener("click", async ()=>{
           if(!person.methods[mid].history) person.methods[mid].history = [];
           person.methods[mid].history.push({ date, evalType, result, evaluator, notes });
           personMethodsUi.openEvalForm = null;
-          personDirty = true;
+          scheduleSave();
           paint();
         });
       });
@@ -4775,21 +4760,13 @@ function parsePersonIdFromHash(hash){
 }
 function applyRouteFromHash(){
   const hash = location.hash;
-  if(view==="person" && personDirty && !suppressNextRouteGuard){
-    const currentPersonHash = "#/person/" + encodeURIComponent(selectedPersonId||"");
-    if(hash !== currentPersonHash){
-      if(!confirm("You have unsaved changes on this page. Leave without saving?")){
-        suppressNextRouteGuard = true;
-        location.hash = currentPersonHash;
-        return;
-      }
-      personDirty = false;
-    }
-  }
-  suppressNextRouteGuard = false;
   const personId = parsePersonIdFromHash(hash);
   if(personId){
-    if(!STATE.people[personId]){ location.hash = "#/"; return; }
+    if(!STATE.people[personId]){
+      // Unknown or removed person id in the URL — fall back to the dashboard instead of a blank page.
+      location.hash = "#/";
+      return;
+    }
     if(selectedPersonId !== personId){
       selectedPersonId = personId;
       personTab = "schedule";
@@ -4802,18 +4779,19 @@ function applyRouteFromHash(){
   const targetView = ROUTES[hash] || "dashboard";
   if(targetView==="admin" || targetView==="methods-admin"){
     pendingAdminView = targetView;
-    if(ADMIN_PWD_HASH && sessionStorage.getItem(ADMIN_SESSION_KEY)!=="1"){ view="dashboard"; paint(); showAdminGate(); return; }
+    if(ADMIN_PWD_HASH && sessionStorage.getItem(ADMIN_SESSION_KEY)!=="1"){
+      view = "dashboard";
+      paint();
+      showAdminGate();
+      return;
+    }
     if(targetView==="admin"){ adminAddOpen=false; adminRemoveConfirmId=null; adminRemoveHereConfirmId=null; }
     if(targetView==="methods-admin"){ methodsAdminAddOpen=false; }
   }
   view = targetView;
   paint();
 }
-}
 window.addEventListener("hashchange", applyRouteFromHash);
-  window.addEventListener("beforeunload", (e)=>{
-  if(personDirty){ e.preventDefault(); e.returnValue = ""; }
-});
   const openPwdSetBtn = document.getElementById("openPwdSet");
   if(openPwdSetBtn) openPwdSetBtn.addEventListener("click", openPwdSetModal);
   // v3.7 — dashboard-level bulk Excel import (static shell, wired once — see comment above). No
