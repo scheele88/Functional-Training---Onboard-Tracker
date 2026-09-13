@@ -4774,7 +4774,19 @@ if(employmentInput){
     paint();
   });
 }
-            const changePositionBtn = document.getElementById("changePositionBtn");
+            const statusOverrideInput = document.getElementById("statusOverrideInput");
+      if(statusOverrideInput){
+        statusOverrideInput.addEventListener("change", ()=>{
+          const person = activePersonPage();
+          if(!person) return;
+
+          person.statusOverride = statusOverrideInput.value;
+          personPageDirty = true;
+          updatePersonSaveBarUI();
+        });
+      }
+      
+      const changePositionBtn = document.getElementById("changePositionBtn");
       if(changePositionBtn){
         changePositionBtn.addEventListener("click", openPosChangeModal);
       }
@@ -4812,18 +4824,7 @@ if(endDateInput){
     paint();
   });
 });
-      root.querySelectorAll('select[data-field="status"]').forEach(sel=>{
-        sel.addEventListener("change", ()=>{
-          const id = sel.getAttribute("data-id");
-          const person = STATE.people[selectedPersonId];
-          const ist = itemState(person, id);
-          ist.status = sel.value;
-          if(sel.value==="Passed" && !ist.actualDate) ist.actualDate = toISO(new Date());
-          if(sel.value!=="Passed") ist.actualDate = "";
-          paint();
-          scheduleSave();
-        });
-      });
+      
       root.querySelectorAll('input[data-field="target"]').forEach(inp=>{
   inp.addEventListener("change", ()=>{
     const id = inp.getAttribute("data-id");
