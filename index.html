@@ -4669,6 +4669,19 @@ if(backMethodsAdminBtn) backMethodsAdminBtn.addEventListener("click", ()=>{ loca
     } else {
       const backBtn = document.getElementById("backToDash");
 if(backBtn) backBtn.addEventListener("click", ()=>{ removeConfirmId=null; location.hash = "#/"; });
+            const savePersonBtn = document.getElementById("savePersonChanges");
+      if(savePersonBtn){
+        savePersonBtn.addEventListener("click", async ()=>{
+          await saveCurrentPersonChanges();
+        });
+      }
+
+      const discardPersonBtn = document.getElementById("discardPersonChanges");
+      if(discardPersonBtn){
+        discardPersonBtn.addEventListener("click", ()=>{
+          discardCurrentPersonChanges();
+        });
+      }
       // v3.7 — Planner/Schedule vs. Re-evaluation tabs (analyst positions only)
       root.querySelectorAll("[data-person-tab]").forEach(btn=>{
         btn.addEventListener("click", ()=>{
