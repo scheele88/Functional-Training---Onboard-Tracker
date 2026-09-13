@@ -4708,7 +4708,43 @@ if(backMethodsAdminBtn) backMethodsAdminBtn.addEventListener("click", ()=>{ loca
       });
     } else {
       const backBtn = document.getElementById("backToDash");
-if(backBtn) backBtn.addEventListener("click", ()=>{ removeConfirmId=null; location.hash = "#/"; });
+      if(backBtn) backBtn.addEventListener("click", async ()=>{
+        removeConfirmId = null;
+
+        if(!personPageDirty){
+          location.hash = "#/";
+          return;
+        }
+
+        const saveFirst = confirm(
+          "You have unsaved changes for this person.\n\n" +
+          "Click OK to save the changes before leaving.\n" +
+          "Click Cancel to choose whether to discard them or keep editing."
+        );
+
+        if(saveFirst){
+          const saved = await saveCurrentPersonChanges();
+          if(saved){
+            location.hash = "#/";
+          }
+          return;
+        }
+
+        const discard = confirm(
+          "Discard all unsaved changes?\n\n" +
+          "Click OK to discard the changes and return to All people.\n" +
+          "Click Cancel to keep editing."
+        );
+
+        if(discard){
+          if(personPageOriginal){
+            personPageDraft = clonePersonPageData(personPageOriginal);
+          }
+          personPageDirty = false;
+          clearPersonPageDraft();
+          location.hash = "#/";
+        }
+      });
             const savePersonBtn = document.getElementById("savePersonChanges");
       if(savePersonBtn){
         savePersonBtn.addEventListener("click", async ()=>{
