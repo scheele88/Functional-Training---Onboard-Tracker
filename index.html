@@ -651,6 +651,22 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
       return false;
     }
   }
+    function discardCurrentPersonChanges(){
+    if(!personPageDirty || personPageSaveInProgress) return;
+
+    const person = activePersonPage();
+    if(!person || !personPageOriginal) return;
+
+    const ok = confirm(
+      "You have unsaved changes for this person.\n\nDiscard all unsaved changes?"
+    );
+
+    if(!ok) return;
+
+    personPageDraft = clonePersonPageData(personPageOriginal);
+    personPageDirty = false;
+    paint();
+  }
 
   let addFormOpen = false;
   let removeConfirmId = null;   // person id currently showing "click again to remove"
