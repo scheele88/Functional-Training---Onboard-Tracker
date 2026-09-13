@@ -4785,7 +4785,26 @@ if(employmentInput){
           updatePersonSaveBarUI();
         });
       }
-      
+
+            const notesInput = document.getElementById("notesInput");
+      if(notesInput){
+        notesInput.addEventListener("input", ()=>{
+          const person = activePersonPage();
+          if(!person) return;
+
+          person.notes = notesInput.value;
+          personPageDirty = true;
+          updatePersonSaveBarUI();
+        });
+
+        notesInput.addEventListener("change", ()=>{
+          const person = activePersonPage();
+          if(!person) return;
+
+          person.notes = notesInput.value.trim();
+          updatePersonSaveBarUI();
+        });
+      }
       const changePositionBtn = document.getElementById("changePositionBtn");
       if(changePositionBtn){
         changePositionBtn.addEventListener("click", openPosChangeModal);
