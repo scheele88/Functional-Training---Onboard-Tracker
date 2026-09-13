@@ -3273,6 +3273,25 @@ async function buildAndDownloadExcelReport(){
     `;
   }
 
+    function updatePersonSaveBarUI(){
+    const saveBtn = document.getElementById("savePersonChanges");
+    const discardBtn = document.getElementById("discardPersonChanges");
+    const statusEl = document.getElementById("personSaveStatus");
+
+    const hasUnsaved = personPageDirty && !personPageSaveInProgress;
+
+    if(saveBtn) saveBtn.disabled = !hasUnsaved;
+    if(discardBtn) discardBtn.disabled = !hasUnsaved;
+
+    if(statusEl){
+      statusEl.textContent = personPageSaveInProgress
+        ? "Saving changes…"
+        : personPageDirty
+          ? "Unsaved changes"
+          : "No unsaved changes";
+    }
+  }
+
   function renderPersonView(){
    const person = activePersonPage() || STATE.people[selectedPersonId];
     if(!person){ view="dashboard"; return renderDashboard(); }
@@ -4686,33 +4705,37 @@ if(nameInput){
     paint();
   });
 }
-     const empIdInput = document.getElementById("empIdInput");
-if(empIdInput){
-  empIdInput.addEventListener("change", ()=>{
-    const person = activePersonPage();
-    if(!person) return;
+                const nameInput = document.getElementById("nameInput");
+      if(nameInput){
+        nameInput.addEventListener("input", ()=>{
+          const person = activePersonPage();
+          if(!person) return;
 
-    person.employeeId = empIdInput.value.trim();
-    personPageDirty = true;
-    paint();
-  });
-}
-      const employmentInput = document.getElementById("employmentInput");
-if(employmentInput){
-  employmentInput.addEventListener("change", ()=>{
-    const person = activePersonPage();
-    if(!person) return;
+          person.name = nameInput.value;
+          personPageDirty = true;
+          updatePersonSaveBarUI();
+        });
 
-    person.employmentStatus = employmentInput.value;
+        nameInput.addEventListener("change", ()=>{
+          const person = activePersonPage();
+          if(!person) return;
 
-    if(person.employmentStatus!=="resigned"){
-      person.endDate = "";
-    }
+          const trimmed = nameInput.value.trim();
 
-    personPageDirty = true;
-    paint();
-  });
-}
+          if(!trimmed){
+            person.name = personPageOriginal.name;
+            nameInput.value = person.name;
+            personPageDirty = true;
+            updatePersonSaveBarUI();
+            return;
+          }
+
+          person.name = trimmed;
+          nameInput.value = trimmed;
+          personPageDirty = true;
+          updatePersonSaveBarUI();
+        });
+      }
             const changePositionBtn = document.getElementById("changePositionBtn");
       if(changePositionBtn){
         changePositionBtn.addEventListener("click", openPosChangeModal);
