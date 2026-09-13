@@ -1796,7 +1796,7 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
 
   // ---------- position change (promotion / rotation) ----------
   function openPosChangeModal(){
-    const person = STATE.people[selectedPersonId];
+  const person = activePersonPage();
     if(!person) return;
     const sel = document.getElementById("posChangeNewPosition");
     sel.innerHTML = POSITION_ORDER.map(pk=>`<option value="${pk}" ${pk===person.positionKey?'selected':''}>${esc(POSITIONS[pk].label)}</option>`).join("");
@@ -1836,31 +1836,55 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
       }
     });
   }
-  function savePosChange(){
-    const person = STATE.people[selectedPersonId];
+    function savePosChange(){
+    const person = activePersonPage();
     if(!person) return;
+
     const newPositionKey = document.getElementById("posChangeNewPosition").value;
     const dateEl = document.getElementById("posChangeDate");
     const effectiveDate = dateEl ? dateEl.value : "";
-    const note = (document.getElementById("posChangeNote").value||"").trim();
+    const note = (document.getElementById("posChangeNote").value || "").trim();
     const errEl = document.getElementById("posChangeErr");
-    if(!effectiveDate){ errEl.textContent = "Pick an effective date."; return; }
-    if(newPositionKey === person.positionKey){ errEl.textContent = "That's already their current position — pick a different one, or Cancel."; return; }
-    if(!person.positionHistory) person.positionHistory = [];
+
+    if(!effectiveDate){
+      errEl.textContent = "Pick an effective date.";
+      return;
+    }
+
+    if(newPositionKey === person.positionKey){
+      errEl.textContent = "That's already their current position — pick a different one, or Cancel.";
+      return;
+    }
+
+    if(!person.positionHistory){
+      person.positionHistory = [];
+    }
+
     const oldPositionKey = person.positionKey;
-    // Close out the outgoing position as its own dated history entry.
+
     person.positionHistory.push({
       positionKey: oldPositionKey,
       effectiveDate: positionRefDate(person),
       endDate: effectiveDate,
       note: note
     });
-    transferSharedCourseStatus(person, oldPositionKey, newPositionKey, effectiveDate);
+
+    transferSharedCourseStatus(
+      person,
+      oldPositionKey,
+      newPositionKey,
+      effectiveDate
+    );
+
     person.positionKey = newPositionKey;
     person.positionEffectiveDate = effectiveDate;
+
+    // Stage the change only.
+    // The main person-page Save Changes button saves it to Supabase.
+    personPageDirty = true;
+
     closePosChangeModal();
     paint();
-    scheduleSave();
   }
 
   // ---------- Export Report (PPTX, 16:9) ----------
