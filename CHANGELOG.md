@@ -1,32 +1,22 @@
-## v3.23 — Person-page Save Confirmation
+## v3.23 — Person-page Save Confirmation Completed
 
-Date: 2026-09-12
+### Completed
 
-### Requested change
+- Name and Employee ID changes are detected immediately.
+- Status and Notes changes are held as drafts.
+- Position changes are held as drafts.
+- The Change Position modal no longer saves directly.
+- Save Changes commits the complete current person record.
+- Discard Changes restores the original person record.
+- Browser refresh warns when unsaved changes exist.
+- No database migration was required.
 
-Replace automatic saving on an individual person's page with an explicit Save Changes process.
+### Verification
 
-### Required behavior
-
-- Person-page edits remain temporary until Save Changes is clicked.
-- Save Changes saves all edits for the current person.
-- Discard Changes restores the original values.
-- Leaving the page with unsaved changes requires confirmation.
-- Failed saves keep the unsaved draft visible.
-- Dashboard and admin automatic-save behavior remains unchanged initially.
-- No database migration is expected.
-
-### Scope
-
-- Person information
-- Planner/Schedule course information
-- Test-method evaluation information
-- Person-page navigation and refresh warnings
-
-### Testing person
-
-Use a temporary test person only. Do not test first on a real employee.
-
-### Status
-
-Planning completed. Implementation not started.
+- Save multiple fields together: Passed
+- Discard multiple fields together: Passed
+- Refresh before saving: Passed
+- Cancel refresh: Passed
+- Position change without main Save: Passed
+- Position change with main Save: Passed
+- Console errors: None observed
