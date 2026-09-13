@@ -3273,6 +3273,25 @@ async function buildAndDownloadExcelReport(){
     `;
   }
 
+    function updatePersonSaveBarUI(){
+    const saveBtn = document.getElementById("savePersonChanges");
+    const discardBtn = document.getElementById("discardPersonChanges");
+    const statusEl = document.getElementById("personSaveStatus");
+
+    const hasUnsaved = personPageDirty && !personPageSaveInProgress;
+
+    if(saveBtn) saveBtn.disabled = !hasUnsaved;
+    if(discardBtn) discardBtn.disabled = !hasUnsaved;
+
+    if(statusEl){
+      statusEl.textContent = personPageSaveInProgress
+        ? "Saving changes…"
+        : personPageDirty
+          ? "Unsaved changes"
+          : "No unsaved changes";
+    }
+  }
+
   function renderPersonView(){
    const person = activePersonPage() || STATE.people[selectedPersonId];
     if(!person){ view="dashboard"; return renderDashboard(); }
@@ -4668,35 +4687,48 @@ if(startInput){
     paint();
   });
 }
-     const nameInput = document.getElementById("nameInput");
-if(nameInput){
-  nameInput.addEventListener("change", ()=>{
-    const person = activePersonPage();
-    if(!person) return;
+          const nameInput = document.getElementById("nameInput");
+      if(nameInput){
+        nameInput.addEventListener("input", ()=>{
+          const person = activePersonPage();
+          if(!person) return;
 
-    const trimmed = nameInput.value.trim();
+          person.name = nameInput.value;
+          personPageDirty = true;
+          updatePersonSaveBarUI();
+        });
 
-    if(!trimmed){
-      nameInput.value = person.name;
-      return;
-    }
+        nameInput.addEventListener("change", ()=>{
+          const person = activePersonPage();
+          if(!person) return;
 
-    person.name = trimmed;
-    personPageDirty = true;
-    paint();
-  });
-}
-     const empIdInput = document.getElementById("empIdInput");
-if(empIdInput){
-  empIdInput.addEventListener("change", ()=>{
-    const person = activePersonPage();
-    if(!person) return;
+          const trimmed = nameInput.value.trim();
 
-    person.employeeId = empIdInput.value.trim();
-    personPageDirty = true;
-    paint();
-  });
-}
+          if(!trimmed){
+            person.name = personPageOriginal.name;
+            nameInput.value = person.name;
+            personPageDirty = true;
+            updatePersonSaveBarUI();
+            return;
+          }
+
+          person.name = trimmed;
+          nameInput.value = trimmed;
+          personPageDirty = true;
+          updatePersonSaveBarUI();
+        });
+      }
+           const empIdInput = document.getElementById("empIdInput");
+      if(empIdInput){
+        empIdInput.addEventListener("input", ()=>{
+          const person = activePersonPage();
+          if(!person) return;
+
+          person.employeeId = empIdInput.value.trim();
+          personPageDirty = true;
+          updatePersonSaveBarUI();
+        });
+      }
       const employmentInput = document.getElementById("employmentInput");
 if(employmentInput){
   employmentInput.addEventListener("change", ()=>{
