@@ -566,7 +566,7 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
     poly_pal:        { label:"QC Analyst \u2014 PAL", sectionKey:"polyolefins", courseKey:"poly_pal" },
     poly_daytime:    { label:"QC Analyst \u2014 Daytime", sectionKey:"polyolefins", courseKey:"poly_daytime" },
   };
-  const POSITION_ORDER = ["dept_manager", "sm", "ss", "lead_eng", "senior_eng", "gas", "oil", "utility"];
+  const POSITION_ORDER = ["dept_manager", "qa_sm", "qa_lead_eng", "qa_senior_eng", "qa_eng", "sm", "ss", "lead_eng", "senior_eng", "gas", "oil", "utility"];
   const EXPANDED_POSITION_ORDER = [
     "dept_manager",
     "qa_sm","qa_lead_eng","qa_senior_eng","qa_eng",
@@ -578,6 +578,10 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
   // so the 7 tracks read apart at a glance instead of every position looking the same neutral grey.
   const POSITION_COLORS = {
     dept_manager:{ c:"#334155", soft:"#E2E8F0", ink:"#1E293B" },
+    qa_sm:      { c:"#7C2D12", soft:"#FFEDD5", ink:"#9A3412" },
+    qa_lead_eng:{ c:"#A21CAF", soft:"#FAE8FF", ink:"#86198F" },
+    qa_senior_eng:{ c:"#BE185D", soft:"#FCE7F3", ink:"#9D174D" },
+    qa_eng:     { c:"#DB2777", soft:"#FCE7F3", ink:"#9D174D" },
     sm:         { c:"#4F46E5", soft:"#EAE8FD", ink:"#4338CA" },  // indigo — section leadership
     ss:         { c:"#0E9AAE", soft:"#DFF4F6", ink:"#0B7686" },  // teal
     lead_eng:   { c:"#7C3AED", soft:"#F1E8FE", ink:"#6226C4" },  // violet
@@ -776,9 +780,10 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
   let methodsImportReview = null;
   let methodsImportError = "";        // shown on the Manage-test-methods toolbar when the file couldn't be read at all
 
-  const COURSE_KEY_ORDER = ["dept_manager","sm","ss","eng","gas","oil","utility"];
+  const COURSE_KEY_ORDER = ["dept_manager","qa_sm","qa_lead","qa_eng","sm","ss","eng","gas","oil","utility"];
   const COURSE_KEY_LABELS = {
     dept_manager: "Department Manager",
+    qa_sm: "QA Section Manager", qa_lead: "QA Lead Engineer", qa_eng: "QA Senior Engineer / QA Engineer",
     sm: "Section Manager", ss: "Supervisor (SS)", eng: "Lead / Senior / QC Engineer",
     gas: "Analyst — Gas", oil: "Analyst — Oil", utility: "Analyst — Utility"
   };
@@ -838,13 +843,25 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
   // Manager-level plans are entirely first priority. General documents are Phase 1 and CL-T test
   // methods are Phase 2; both are paced across the full eight training weeks before evaluation.
   COURSE_DATA.dept_manager = [{"id":"dept-manager-1","no":1,"code":"CL-M-1000-0001","topic":"Quality Manual","type":"Document","method":"SL","hours":4,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-2","no":2,"code":"CL-P-1000-0001","topic":"Laboratory Service","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-3","no":3,"code":"CL-P-1000-0005","topic":"Corrective and Preventive action for abnormality","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-4","no":4,"code":"CL-P-1000-0006","topic":"Quality Assurance of Test Results","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-5","no":5,"code":"CL-P-1000-0007","topic":"Handling Claim and Complaint","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-6","no":6,"code":"CL-P-1000-0008","topic":"Specification review","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-7","no":7,"code":"CL-P-1000-0010","topic":"Management of change","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-8","no":8,"code":"CL-P-1000-0011","topic":"Contract Review","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-9","no":9,"code":"CL-P-1000-0012","topic":"Alternative Raw material management","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-10","no":10,"code":"CL-P-1000-0013","topic":"Product Non-conformance management","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-11","no":11,"code":"CL-P-1000-0014","topic":"Production following Halal MUI requirement","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-12","no":12,"code":"CL-P-1000-0015","topic":"Licensed Product Validation Procedure","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-13","no":13,"code":"CL-P-1000-0016","topic":"Statistical methods for use in proficiency testing by interlaboratory comparison","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-14","no":14,"code":"CL-P-1000-0018","topic":"Actions to Maintain Impartiality of Testing Activities","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-15","no":15,"code":"CL-P-1000-0019","topic":"Customer Confidentiality and Rights","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-16","no":16,"code":"CL-P-1000-0020","topic":"Risk management","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-17","no":17,"code":"CL-P-1000-0021","topic":"Handling Complaint from ISO/IEC 17025 Activities","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-18","no":18,"code":"CL-P-1000-0023","topic":"Authorize Management  for external personal to work","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-19","no":19,"code":"CL-P-1000-0025","topic":"Laboratory Improvement Management","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-20","no":20,"code":"CL-W-1000-99-0002","topic":"Laboratory waste management","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-21","no":21,"code":"CL-W-1000-99-0004","topic":"Measurement Uncertainty","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-22","no":22,"code":"CL-W-1000-99-0005","topic":"Training and Evaluation","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-23","no":23,"code":"CL-W-1000-99-0007","topic":"Laboratory Safety Guideline","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-24","no":24,"code":"CL-W-1000-99-0016","topic":"Interlaboratory Testing","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-25","no":25,"code":"CL-W-1000-99-0020","topic":"Test report","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-26","no":26,"code":"CL-W-1000-99-0037","topic":"Control Document and Records","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""},{"id":"dept-manager-27","no":27,"code":"CL-W-1000-99-0061","topic":"Customer Satisfaction Survey","type":"Document","method":"SL","hours":2,"trainer":"-","evalMethod":"WT","phaseKey":"p1","week":1,"postLabel":""}];
-  const FIXED_TRAINING_WEEKS = { sm:8, dept_manager:8 };
-  function applyManagerPriorityPlan(courseKey){
-    const items = COURSE_DATA[courseKey] || [];
-    items.forEach(item=>{
-      item.phaseKey = /^CL-T-/i.test(courseDisplayCode(item)) ? "p2" : "p1";
-      item.postLabel = "";
+  const QA_SM_SOURCE = [
+    ["CL-M-1000-0001","Quality Manual",4],["CL-P-1000-0002","Raw Materials Inspection",2],["CL-P-1000-0003","Product quality inspection during the manufacturing process",2],["CL-P-1000-0004","Product Testing For Quality Classification",2],["CL-P-1000-0005","Corrective and Preventive action for abnormality",2],["CL-P-1000-0006","Quality Assurance of Test Results",2],["CL-P-1000-0007","Handling Claim and Complaint",2],["CL-P-1000-0008","Specification review",2],["CL-P-1000-0010","Management of change",2],["CL-P-1000-0011","Contract Review",2],["CL-P-1000-0012","Alternative Raw material management",2],["CL-P-1000-0013","Product Non-conformance management",2],["CL-P-1000-0014","Production following Halal MUI requirement",2],["CL-P-1000-0015","Licensed Product Validation Procedure",2],["CL-P-1000-0026","Food safety requirement (HACCP) for HDPE product",2],["CL-W-1000-99-0027","Action Guideline of equipment abnormality",2],["CL-W-1000-99-0034","Quality Review and Regulatory Review",2],["CL-W-1000-99-0040","Guildeline when found Abnormal result",2],["CL-W-1000-99-0073","Work instruction for consider for hold-unhold product",2],["CL-P-1000-0016","Statistical methods for use in proficiency testing by interlaboratory comparison",2],["CL-P-1000-0018","Actions to Maintain Impartiality of Testing Activities",2],["CL-P-1000-0019","Customer Confidentiality and Rights",2],["CL-P-1000-0020","Risk management",2],["CL-P-1000-0021","Handling Complaint from ISO/IEC 17025 Activities",2],["CL-P-1000-0023","Authorize Management  for external personal to work",2],["CL-P-1000-0025","Laboratory Improvement Management",2],["CL-W-1000-99-0004","Measurement Uncertainty",2],["CL-W-1000-99-0005","Training and Evaluation",2],["CL-W-1000-99-0007","Laboratory Safety Guideline",2],["CL-W-1000-99-0016","Interlaboratory Testing",3],["CL-W-1000-99-0037","Control Document and Records",2],["CL-W-1000-99-0061","Customer Satisfaction Survey",2],["IM-P-1000-001","Documented information management",2],["IM-P-1000-002","Customer claim & complaint handling",2],["IM-P-1000-003","Internal Audit Procedure",2]
+  ];
+  const QA_ENGINEER_SOURCE = [
+    ["CL-P-1000-0002","Raw Materials Inspection",2],["CL-P-1000-0003","Product quality inspection during the manufacturing process",2],["CL-P-1000-0004","Product Testing For Quality Classification",2],["CL-P-1000-0005","Corrective and Preventive action for abnormality",2],["CL-P-1000-0006","Quality Assurance of Test Results",2],["CL-P-1000-0007","Handling Claim and Complaint",2],["CL-P-1000-0008","Specification review",2],["CL-P-1000-0010","Management of change",2],["CL-P-1000-0011","Contract Review",2],["CL-P-1000-0012","Alternative Raw material management",2],["CL-P-1000-0013","Product Non-conformance management",2],["CL-P-1000-0014","Production following Halal MUI requirement",2],["CL-P-1000-0015","Licensed Product Validation Procedure",2],["CL-P-1000-0026","Food safety requirement (HACCP) for HDPE product",2],["CL-W-1000-99-0034","Quality Review and Regulatory Review",2],["CL-W-1000-99-0040","Guildeline when found Abnormal result",2],["CL-W-1000-99-0067","Product quality classification",2],["CL-W-1000-99-0073","Work instruction for consider for hold-unhold product",2],["CL-M-1000-0001","Quality Manual",4],["CL-P-1000-0016","Statistical methods for use in proficiency testing by interlaboratory comparison",2],["CL-P-1000-0018","Actions to Maintain Impartiality of Testing Activities",2],["CL-P-1000-0019","Customer Confidentiality and Rights",2],["CL-P-1000-0023","Authorize Management  for external personal to work",2],["CL-W-1000-99-0005","Training and Evaluation",2],["CL-W-1000-99-0007","Laboratory Safety Guideline",2],["CL-W-1000-99-0008","Use of Statistics in Evaluation of Test Results",2],["CL-W-1000-99-0009","Methods for Controlling Test and Calibration in Laboratory Conditions",2],["CL-W-1000-99-0037","Control Document and Records",2],["IM-P-1000-001","Documented information management",2],["IM-P-1000-002","Customer claim & complaint handling",2],["IM-P-1000-003","Internal Audit Procedure",2]
+  ];
+  function makeQaCourses(source, courseKey, priorityLimit){
+    return source.map((row,index)=>{
+      const no = index+1;
+      const priority = no<=priorityLimit;
+      return { id:`${courseKey.replaceAll('_','-')}-${no}`, no, code:row[0], topic:row[1], type:/^CL-T-/i.test(row[0])?"Test Method (OJT)":"Document", method:"SL", hours:row[2], trainer:"-", evalMethod:"WT", phaseKey:priority?"p1":"p4", week:priority?1:0, postLabel:priority?"":"Month 3-8" };
     });
+  }
+  COURSE_DATA.qa_sm = makeQaCourses(QA_SM_SOURCE, "qa_sm", QA_SM_SOURCE.length);
+  COURSE_DATA.qa_lead = makeQaCourses(QA_ENGINEER_SOURCE, "qa_lead", 18);
+  COURSE_DATA.qa_eng = makeQaCourses(QA_ENGINEER_SOURCE, "qa_eng", 18);
+  const FIXED_TRAINING_WEEKS = { sm:8, dept_manager:8, qa_sm:8, qa_lead:8, qa_eng:8 };
+  function applyTwoMonthPriorityPacing(courseKey){
+    const items = COURSE_DATA[courseKey] || [];
     ["p1","p2"].forEach(phaseKey=>{
       const phaseItems = items.filter(item=>item.phaseKey===phaseKey).sort((a,b)=>(a.no||0)-(b.no||0));
       const totalHours = phaseItems.reduce((sum,item)=>sum+(Number(item.hours)||0),0);
@@ -856,11 +873,22 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
           : Math.max(1,Math.min(8,Math.ceil((index+1)/phaseItems.length*8)));
       });
     });
-    const phaseOrder = { p1:0, p2:1 };
+    const phaseOrder = { p1:0, p2:1, p4:2 };
     items.sort((a,b)=>(phaseOrder[a.phaseKey]??9)-(phaseOrder[b.phaseKey]??9) || (a.week||0)-(b.week||0) || (a.no||0)-(b.no||0));
+  }
+  function applyManagerPriorityPlan(courseKey){
+    const items = COURSE_DATA[courseKey] || [];
+    items.forEach(item=>{
+      item.phaseKey = /^CL-T-/i.test(courseDisplayCode(item)) ? "p2" : "p1";
+      item.postLabel = "";
+    });
+    applyTwoMonthPriorityPacing(courseKey);
   }
   applyManagerPriorityPlan("sm");
   applyManagerPriorityPlan("dept_manager");
+  applyManagerPriorityPlan("qa_sm");
+  applyTwoMonthPriorityPacing("qa_lead");
+  applyTwoMonthPriorityPacing("qa_eng");
   // v3.13 — per the user: a course/document code is a real, unique identifier (Lab-XX-XX-XXX, and
   // likewise the CL-T/CL-D/CL-M/HS-K Document or Test Method No. embedded at the start of a topic
   // name) — it must never refer to two different things. Used to block "Add course" from creating a
@@ -1280,7 +1308,7 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
     const sumHours = list => list.reduce((s,it)=>s+(Number(it.hours)||0),0);
     const p1Hours = sumHours(p1), p2Hours = sumHours(p2), p4Hours = sumHours(p4);
     const fixedTrainingWeeks = FIXED_TRAINING_WEEKS[courseKey] || 0;
-    const weeksP2 = fixedTrainingWeeks || (p2.length ? Math.ceil(p2Hours/HOURS_PER_WEEK) : 0);
+    const weeksP2 = p2.length ? (fixedTrainingWeeks || Math.ceil(p2Hours/HOURS_PER_WEEK)) : 0;
     const totalWeeks = fixedTrainingWeeks ? fixedTrainingWeeks+1 : weeksP2+2; // fixed plan, or week 1 + Phase 2 + evaluation
     const postLabels = [];
     p4.forEach(it=>{ if(it.postLabel && postLabels.indexOf(it.postLabel)===-1) postLabels.push(it.postLabel); });
