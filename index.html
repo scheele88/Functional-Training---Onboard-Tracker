@@ -778,6 +778,25 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
     const m = String(text||"").trim().match(/^([A-Za-z0-9]+(?:-[A-Za-z0-9]+){2,5})(?=[\s_]|$)/);
     return m ? m[1] : null;
   }
+  // Present the controlled document/test-method number as the training code while preserving the
+  // source-plan Lab code internally for saved progress, revisions, imports, and history matching.
+  function courseDisplayCode(item){
+    if(!item) return "";
+    return extractLeadingDocCode(item.topic) || String(item.code||"").replace(/\s*\(\*\)\s*$/,"").trim();
+  }
+  function courseDisplayTopic(item){
+    if(!item) return "";
+    const topic = String(item.topic||"").trim();
+    const docCode = extractLeadingDocCode(topic);
+    if(!docCode) return topic;
+    const title = topic.slice(docCode.length).replace(/^\s*(?:_|[-\u2013\u2014:]\s*)?\s*/,"").trim();
+    return title || topic;
+  }
+  function topicForInternalStorage(item, displayedTopic){
+    const title = String(displayedTopic||"").trim();
+    const docCode = extractLeadingDocCode(item && item.topic);
+    return docCode && !extractLeadingDocCode(title) ? `${docCode}_${title}` : title;
+  }
   // v3.13 — per the user: a course/document code is a real, unique identifier (Lab-XX-XX-XXX, and
   // likewise the CL-T/CL-D/CL-M/HS-K Document or Test Method No. embedded at the start of a topic
   // name) — it must never refer to two different things. Used to block "Add course" from creating a
@@ -1464,7 +1483,7 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
   // used to skip creating a separate course row for it, merging it into its one method row instead.
   function courseMethodId(item){
     if(!item || item.type !== "Test Method (OJT)") return null;
-    const m = (item.topic||"").match(/CL-T-\d{4}-\d{4}/);
+    const m = courseDisplayCode(item).match(/CL-T-\d{4}-\d{4}/i) || (item.topic||"").match(/CL-T-\d{4}-\d{4}/i);
     if(!m) return null;
     const norm = m[0].toLowerCase();
     return Object.keys(STATE.methods).find(k=>k.toLowerCase()===norm) || null;
@@ -1475,7 +1494,7 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
     const set = new Set();
     courseData(positionKey, undefined).forEach(it=>{
       if(it.type !== "Test Method (OJT)") return;
-      const m = (it.topic||"").match(/CL-T-\d{4}-\d{4}/);
+      const m = courseDisplayCode(it).match(/CL-T-\d{4}-\d{4}/i) || (it.topic||"").match(/CL-T-\d{4}-\d{4}/i);
       if(m) set.add(m[0].toLowerCase());
     });
     return set;
@@ -2209,8 +2228,8 @@ function excelPersonRows(person){
   const courseRows = items.filter(it=>!courseMethodId(it)).map(it=>{
     const ist = itemState(person, it.id);
     return {
-      course: String(it.code||"").replace(/\s*\(\*\)\s*$/,""),
-      description: extractLeadingDocCode(it.topic) || "",
+      course: courseDisplayCode(it),
+      description: courseDisplayTopic(it),
       completeISO: ist.actualDate || "",
       retrainISO: "",
     };
@@ -2221,8 +2240,8 @@ function excelPersonRows(person){
     .map(r=>{
       const linkedCourse = methodToCourse[r.id] || null;
       return {
-        course: linkedCourse ? String(linkedCourse.code||"").replace(/\s*\(\*\)\s*$/,"") : "",
-        description: r.id,
+        course: linkedCourse ? courseDisplayCode(linkedCourse) : r.id,
+        description: r.method.name || "",
         completeISO: r.status.lastDate || "",
         retrainISO: r.status.nextDue || "",
       };
@@ -2442,7 +2461,7 @@ async function buildAndDownloadExcelReport(){
         <tbody>${rows.map(r=>`<tr>
           <td class="name"><a class="person-link" href="#/person/${encodeURIComponent(r.personId)}">${esc(r.personName)}</a></td>
           <td>${posPill(r.positionKey, r.positionLabel)}</td>
-          <td>${esc(r.item.topic)}<div class="mono" style="font-size:10.5px;color:var(--ink-faint);margin-top:2px">${esc(r.item.code)}</div></td>
+          <td>${esc(courseDisplayTopic(r.item))}<div class="mono" style="font-size:10.5px;color:var(--ink-faint);margin-top:2px">${esc(courseDisplayCode(r.item))}</div></td>
           <td class="mono">${r.target?fmtDate(r.target):'—'}</td>
         </tr>`).join("")}</tbody>
       </table></div>`}
@@ -2818,8 +2837,8 @@ async function buildAndDownloadExcelReport(){
         const postLabel = ov.postLabel!=null ? ov.postLabel : "";
         return `<tr class="${isExcluded(key)?'row-inactive':''}">
           <td><input type="checkbox" data-plan-review-toggle="${esc(key)}" ${isExcluded(key)?'':'checked'}></td>
-          <td class="mono" style="font-size:11px">${esc(a.labCode)}<br><span class="hint">${esc(a.doc)}</span></td>
-          <td>${esc(truncate(a.topic,70))}</td>
+          <td class="mono" style="font-size:11px">${esc(courseDisplayCode({code:a.labCode,topic:a.topic}))}</td>
+          <td>${esc(truncate(courseDisplayTopic({code:a.labCode,topic:a.topic}),70))}</td>
           <td>${esc(a.type.indexOf('Test')===0?'Test (OJT)':'Document')}</td>
           <td>${esc(a.hours)}h</td>
           <td>
@@ -2849,16 +2868,16 @@ async function buildAndDownloadExcelReport(){
           : "";
         return `<tr class="${isExcluded(key)?'row-inactive':''}">
           <td><input type="checkbox" data-plan-review-toggle="${esc(key)}" ${isExcluded(key)?'':'checked'}></td>
-          <td class="mono" style="font-size:11px">${esc(c.code)}<br><span class="hint">${esc(c.doc)}</span></td>
-          <td colspan="4">${esc(truncate(c.topic,55))}${diffText?`<div class="hint" style="margin-top:2px">${esc(diffText)}</div>`:""}${codeNote}</td>
+          <td class="mono" style="font-size:11px">${esc(courseDisplayCode(c))}</td>
+          <td colspan="4">${esc(truncate(courseDisplayTopic(c),55))}${diffText?`<div class="hint" style="margin-top:2px">${esc(diffText)}</div>`:""}${codeNote}</td>
         </tr>`;
       }).join("");
       const obsoleteRows = d.obsolete.map(o=>{
         const key = `${ck}|obsolete|${o.doc}`;
         return `<tr class="${isExcluded(key)?'row-inactive':''}">
           <td><input type="checkbox" data-plan-review-toggle="${esc(key)}" ${isExcluded(key)?'':'checked'}></td>
-          <td class="mono" style="font-size:11px">${esc(o.code)}<br><span class="hint">${esc(o.doc)}</span></td>
-          <td colspan="4">${esc(truncate(o.topic,70))}<div class="hint" style="margin-top:2px">Not found in the new file — will be Deactivated (kept on record, history untouched) unless unchecked.</div></td>
+          <td class="mono" style="font-size:11px">${esc(courseDisplayCode(o))}</td>
+          <td colspan="4">${esc(truncate(courseDisplayTopic(o),70))}<div class="hint" style="margin-top:2px">Not found in the new file — will be Deactivated (kept on record, history untouched) unless unchecked.</div></td>
         </tr>`;
       }).join("");
       return `<section class="panel">
@@ -2930,8 +2949,8 @@ async function buildAndDownloadExcelReport(){
       const customPositionKeys = customEntry ? Object.keys(customEntry.positions||{}) : [];
       const rowClasses = [!active?'row-inactive':'', it._pending?'admin-pending-row':''].filter(Boolean).join(' ');
       const row = `<tr data-admin-id="${esc(it.id)}" data-admin-custom="${it.custom?'true':'false'}" data-admin-code="${esc(it.code)}"${rowClasses?` class="${rowClasses}"`:''}>
-        <td class="mono" style="font-size:11px">${esc(it.code)}${sharedBadge?`<br>${sharedBadge}`:''}</td>
-        <td><input type="text" class="admin-input" data-admin-field="topic" value="${esc(it.topic)}"></td>
+        <td class="mono" style="font-size:11px">${esc(courseDisplayCode(it))}${sharedBadge?`<br>${sharedBadge}`:''}</td>
+        <td><input type="text" class="admin-input" data-admin-field="topic" value="${esc(courseDisplayTopic(it))}"></td>
         <td>
           <select class="admin-input" data-admin-field="type">
             <option value="Document" ${it.type==='Document'?'selected':''}>Document</option>
@@ -3241,9 +3260,9 @@ async function buildAndDownloadExcelReport(){
       ? `<span class="locked-date">${target?fmtDate(target):'—'}</span>`
       : dateEditHtml(`data-field="target" data-id="${item.id}"`, target?toISO(target):"");
     return `<tr data-id="${item.id}" data-phase="${item.phaseKey}">
-      <td class="code" title="${esc(item.code)}">${esc(item.code)}</td>
+      <td class="code" title="${esc(courseDisplayCode(item))}">${esc(courseDisplayCode(item))}</td>
       <td class="course">
-        <div class="name" title="${esc(item.topic)}">${esc(truncate(item.topic,58))}</div>
+        <div class="name" title="${esc(courseDisplayTopic(item))}">${esc(truncate(courseDisplayTopic(item),58))}</div>
         <span class="phase-chip ${item.phaseKey}">${phaseLabel(item.phaseKey)}</span>
         <span class="type-badge ${typeCls}">${item.type.indexOf("Test")===0?'Test · '+esc(item.hours)+'h':'Doc · '+esc(item.hours)+'h'}</span>
         ${overdue?'<span class="row-flag overdue">Overdue</span>':''}
@@ -3469,9 +3488,9 @@ async function buildAndDownloadExcelReport(){
   function renderCourseRowUnified(item, ist, analyst){
     const typeCls = item.type.indexOf("Test")===0 ? "type-test" : "type-doc";
     return `<tr data-id="${item.id}">
-      <td class="mono" style="font-size:11px">${esc(item.code)}</td>
+      <td class="mono" style="font-size:11px">${esc(courseDisplayCode(item))}</td>
       <td>
-        <div class="name" title="${esc(item.topic)}">${esc(truncate(item.topic,58))}</div>
+        <div class="name" title="${esc(courseDisplayTopic(item))}">${esc(truncate(courseDisplayTopic(item),58))}</div>
         <span class="phase-chip ${item.phaseKey}">${phaseLabel(item.phaseKey)}</span>
         <span class="type-badge ${typeCls}">${item.type.indexOf("Test")===0?'Test · '+esc(item.hours)+'h':'Doc · '+esc(item.hours)+'h'}</span>
       </td>
@@ -3801,7 +3820,7 @@ async function buildAndDownloadExcelReport(){
     const norm = String(docCode||"").trim().toUpperCase();
     if(!norm) return null;
     const all = adminCourseRows(posDef.courseKey, positionRefDate(person));
-    return all.find(it=>extractEmbeddedDocCode(it.topic)===norm) || null;
+    return all.find(it=>courseDisplayCode(it).toUpperCase()===norm || extractEmbeddedDocCode(it.topic)===norm) || null;
   }
   // Both lookups above are scoped to the person's CURRENT position's curriculum only (adminCourseRows,
   // including deactivated courses in case one was retired after they completed it) — a code that only
@@ -4293,6 +4312,10 @@ if(backAdminBtn) backAdminBtn.addEventListener("click", ()=>{ location.hash = "#
             const field = el.getAttribute("data-admin-field");
             let value = el.value;
             if(field==="hours" || field==="week") value = Math.max(field==="week"?1:0, Number(value)||0);
+            if(field==="topic"){
+              const sourceItem = adminCourseRows(adminCourseKey).find(it=>normCode(it.code)===normCode(code));
+              value = topicForInternalStorage(sourceItem, value);
+            }
             stageEdit(adminPending, code, adminCourseKey, field, value);
             paint();
           });
