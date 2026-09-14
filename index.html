@@ -4,6 +4,13 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Olefins &amp; UT Training Tracker</title>
+<script>
+  (function(){
+    let theme = "dark";
+    try{ theme = localStorage.getItem("trackerTheme") || "dark"; }catch(e){}
+    document.documentElement.setAttribute("data-theme", theme === "light" ? "light" : "dark");
+  })();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.1/dist/pptxgen.bundle.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -408,6 +415,47 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
   .btn-adm-gate-cancel:hover{ background:var(--surface-3); }
   .adm-gate-err{ color:var(--overdue); font-size:12px; margin-top:2px; min-height:16px; }
   .save-chip[data-state="connecting"]{ background:rgba(255,255,255,0.22); color:#fff; border-color:transparent; }
+  /* v3.31 — Midnight Corporate visual system. Appearance only. */
+  :root{
+    --bg:#EEF2F8;--surface:#FFFFFF;--surface-2:#F5F7FC;--surface-3:#E8EDF7;
+    --ink:#15203A;--ink-muted:#52617E;--ink-faint:#8290AA;--border:#DCE4F0;--border-strong:#C5D1E4;
+    --accent:#5367E8;--accent-2:#0EA5B7;--accent-ink:#FFFFFF;--accent-soft:#E9EDFF;--accent-soft-ink:#354BC7;
+    --header-grad:linear-gradient(130deg,#111A32 0%,#202B55 55%,#12546A 100%);
+    --row-alt:#F8FAFD;--row-hover:#EEF4FF;--panel-glow:rgba(83,103,232,.08);
+    --shadow:0 14px 38px -28px rgba(30,48,90,.55),0 1px 2px rgba(30,48,90,.05);--radius:14px;
+  }
+  :root[data-theme="dark"]{
+    --bg:#070B16;--surface:#101827;--surface-2:#151F32;--surface-3:#202D44;
+    --ink:#F2F6FF;--ink-muted:#AAB7D0;--ink-faint:#7786A4;--border:#22314A;--border-strong:#354866;
+    --accent:#7C78FF;--accent-2:#22C4D6;--accent-ink:#08101F;--accent-soft:#25294E;--accent-soft-ink:#B8B7FF;
+    --header-grad:linear-gradient(130deg,#10172B 0%,#222957 55%,#104454 100%);
+    --passed:#38D69A;--passed-soft:#12392D;--passed-ink:#80E8BF;--progress:#F6B94F;--progress-soft:#3B2B11;--progress-ink:#FFD382;
+    --overdue:#FF7168;--overdue-soft:#40201F;--overdue-ink:#FFA49D;--hold:#B69AF7;--hold-soft:#2D2550;--hold-ink:#D8C8FF;
+    --phase1:#64A0FF;--phase1-soft:#172D50;--phase1-ink:#AFCFFF;--phase2:#C48CFF;--phase2-soft:#30204F;--phase2-ink:#DEC0FF;
+    --phase3:#F6B95B;--phase3-soft:#3B2B16;--phase3-ink:#FFD390;--row-alt:#0D1523;--row-hover:#182640;
+    --panel-glow:rgba(124,120,255,.12);--shadow:0 18px 50px -30px rgba(0,0,0,.95),0 1px 0 rgba(255,255,255,.025);
+  }
+  body{min-height:100vh;background:radial-gradient(circle at 8% -10%,var(--panel-glow),transparent 34rem),radial-gradient(circle at 96% 8%,rgba(34,196,214,.07),transparent 28rem),var(--bg);}
+  .wrap{max-width:1380px;padding:22px 24px 64px;}
+  header.top{margin-bottom:16px;padding:18px 22px;border:1px solid rgba(255,255,255,.1);border-radius:18px;box-shadow:0 22px 48px -28px rgba(0,0,0,.85),inset 0 1px 0 rgba(255,255,255,.06);}
+  header.top h1{font-size:24px;letter-spacing:-.025em;}header.top .subtitle{color:rgba(231,240,255,.72);}
+  .header-actions{gap:8px;flex-wrap:wrap;justify-content:flex-end;}
+  header.top .btn,header.top select,#themeToggle{background:rgba(255,255,255,.09);color:#F7FAFF;border:1px solid rgba(255,255,255,.2);backdrop-filter:blur(8px);}
+  header.top .btn:hover,header.top select:hover,#themeToggle:hover{background:rgba(255,255,255,.17);}header.top select option{background:#172139;color:#F7FAFF;}#themeToggle{min-width:104px;}
+  .tiles{gap:12px;margin:16px 0 18px;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));}
+  .tile{min-height:112px;padding:16px 18px;border-radius:15px;isolation:isolate;}.tile::before{left:0;right:0;top:0;bottom:auto;width:auto;height:3px;opacity:1;}
+  .tile::after{content:"";position:absolute;width:110px;height:110px;right:-50px;top:-55px;border-radius:50%;background:currentColor;opacity:.035;z-index:-1;}
+  .tile .label{font-size:10.5px;letter-spacing:.085em;line-height:1.45;}.tile .value{font-size:29px;margin-top:8px;letter-spacing:-.04em;}.ring-tile{gap:12px;}.ring-tile .rt-text .value{font-size:27px;}
+  section.panel{border-radius:16px;margin-bottom:18px;}.panel-head{padding:15px 18px;}.panel-head h2{font-size:16px;letter-spacing:-.01em;}
+  .people-toolbar{padding:12px 18px;background:linear-gradient(90deg,var(--surface),var(--surface-2));}.filter-bar{padding:11px 18px;}
+  .btn{border-radius:9px;}.btn.primary{box-shadow:0 8px 22px -12px var(--accent);}input,select,textarea{accent-color:var(--accent);}
+  input[type="text"],input[type="date"],input[type="password"],input[type="number"],select,textarea{background:var(--surface);color:var(--ink);border-color:var(--border-strong);}
+  input:focus,select:focus,textarea:focus,button:focus-visible,a:focus-visible{outline:2px solid var(--accent-2);outline-offset:2px;}
+  table.people tbody tr:nth-child(even) td,table.admin-table tbody tr:nth-child(even):not(.admin-divider):not(.admin-edit-panel-row) td{background:var(--row-alt);}
+  table.people tbody tr:hover td,table.admin-table tbody tr:hover td{background:var(--row-hover);}table.people th,table.admin-table th{background:var(--surface-2);color:var(--ink-faint);}
+  .pos-pill,.flag-chip{border:1px solid rgba(127,145,180,.12);}.modal-card,.adm-gate-card{border:1px solid var(--border);box-shadow:0 28px 80px -30px rgba(0,0,0,.9);}
+  ::-webkit-scrollbar{width:11px;height:11px;}::-webkit-scrollbar-track{background:var(--bg);}::-webkit-scrollbar-thumb{background:var(--border-strong);border:3px solid var(--bg);border-radius:999px;}
+  @media(max-width:760px){.wrap{padding:14px 12px 40px;}header.top{padding:16px}.header-actions{justify-content:flex-start}.tiles{grid-template-columns:repeat(2,minmax(0,1fr));}.tile{min-height:100px;}}
 </style>
 
 
@@ -430,6 +478,7 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
 <a href="#/manage-methods" class="btn small dash-only-action" id="openMethodsAdmin">Manage test methods</a>
       <button class="btn small dash-only-action" id="openDashMethodsImport" title="Bulk-update test-method Complete Date / Re-Training Date AND Planner/Schedule course status, for every matching person found in one Excel file — any position, not just Analysts">Import test results (Excel)</button>
       <input type="file" id="dashMethodsImportFile" accept=".xlsx,.xls" style="display:none">
+      <button class="btn small" id="themeToggle" type="button" aria-label="Switch appearance"></button>
       <button class="btn small dash-only-action" id="openPwdSet" title="Set or change the admin password">🔒</button>
       <span class="save-chip dash-only-action" id="saveChip" data-state="idle">Connecting…</span>
     </div>
@@ -5409,6 +5458,22 @@ function applyRouteFromHash(){
     }
   });
   window.addEventListener("hashchange", applyRouteFromHash);
+  const themeToggleBtn = document.getElementById("themeToggle");
+  function refreshThemeToggle(){
+    if(!themeToggleBtn) return;
+    const dark = document.documentElement.getAttribute("data-theme") !== "light";
+    themeToggleBtn.textContent = dark ? "Light mode" : "Dark mode";
+    themeToggleBtn.title = dark ? "Switch to light appearance" : "Switch to dark appearance";
+  }
+  if(themeToggleBtn){
+    refreshThemeToggle();
+    themeToggleBtn.addEventListener("click", ()=>{
+      const next = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", next);
+      try{ localStorage.setItem("trackerTheme", next); }catch(e){}
+      refreshThemeToggle();
+    });
+  }
   const openPwdSetBtn = document.getElementById("openPwdSet");
   if(openPwdSetBtn) openPwdSetBtn.addEventListener("click", openPwdSetModal);
   // v3.7 — dashboard-level bulk Excel import (static shell, wired once — see comment above). No
