@@ -853,6 +853,8 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
           : Math.max(1,Math.min(8,Math.ceil((index+1)/phaseItems.length*8)));
       });
     });
+    const phaseOrder = { p1:0, p2:1 };
+    items.sort((a,b)=>(phaseOrder[a.phaseKey]??9)-(phaseOrder[b.phaseKey]??9) || (a.week||0)-(b.week||0) || (a.no||0)-(b.no||0));
   }
   applyManagerPriorityPlan("sm");
   // v3.13 — per the user: a course/document code is a real, unique identifier (Lab-XX-XX-XXX, and
