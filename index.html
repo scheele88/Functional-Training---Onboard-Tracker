@@ -3340,7 +3340,10 @@ async function buildAndDownloadExcelReport(){
     </tr>`;
   }
   function renderGanttRows(person, items, meta, totalWeeks){
-    const p1p2 = items.filter(it=>it.phaseKey==="p1"||it.phaseKey==="p2").slice().sort((a,b)=> a.week-b.week || a.no-b.no);
+    const phaseOrder = { p1:0, p2:1 };
+    const p1p2 = items.filter(it=>it.phaseKey==="p1"||it.phaseKey==="p2").slice().sort((a,b)=>
+      phaseOrder[a.phaseKey]-phaseOrder[b.phaseKey] || a.week-b.week || a.no-b.no
+    );
     const p3 = items.filter(it=>it.phaseKey==="p4").slice().sort((a,b)=>a.no-b.no);
     const weekMap = phase3ApproxWeeks(meta, items);
     let lastPhase = null;
@@ -3350,7 +3353,10 @@ async function buildAndDownloadExcelReport(){
     p1p2.forEach(item=>{
       if(item.phaseKey!==lastPhase){
         lastPhase = item.phaseKey;
-        const label = item.phaseKey==="p1" ? "Phase 1 — Orientation Essentials (Week 1)" : "Phase 2 — Critical Qualification (Probation)";
+        const phase1SpansMultipleWeeks = items.some(it=>it.phaseKey==="p1" && Number(it.week)>1);
+        const label = item.phaseKey==="p1"
+          ? `Phase 1 — Orientation Essentials${phase1SpansMultipleWeeks?'':' (Week 1)'}`
+          : "Phase 2 — Critical Qualification (Probation)";
         out.push(`<tr class="phase-divider phase-${item.phaseKey}"><td colspan="${colspan}">${label}</td></tr>`);
       }
       const ist = itemState(person, item.id);
@@ -3592,7 +3598,10 @@ async function buildAndDownloadExcelReport(){
     const posMethodCodes = curriculumMethodCodes(person.positionKey);
 
     // ---- Courses (curriculum), minus any that ARE a catalog test method (see courseMethodId above) ----
-    const p1p2 = items.filter(it=>it.phaseKey==="p1"||it.phaseKey==="p2").slice().sort((a,b)=> a.week-b.week || a.no-b.no);
+    const coursePhaseOrder = { p1:0, p2:1 };
+    const p1p2 = items.filter(it=>it.phaseKey==="p1"||it.phaseKey==="p2").slice().sort((a,b)=>
+      coursePhaseOrder[a.phaseKey]-coursePhaseOrder[b.phaseKey] || a.week-b.week || a.no-b.no
+    );
     const p3 = items.filter(it=>it.phaseKey==="p4").slice().sort((a,b)=>a.no-b.no);
     // The status filter's basic three values (all/assigned="completed"/unassigned="not completed") apply
     // to courses the same way they apply to methods below; the Analyst-only re-evaluation-specific values
