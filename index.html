@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Central Laboratory Training Tracker</title>
+<title>Olefins &amp; UT Training Tracker</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.1/dist/pptxgen.bundle.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -416,8 +416,8 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
 <div class="wrap">
   <header class="top">
     <div>
-      <h1 id="pageTitle">Central Laboratory — Onboarding &amp; Qualification</h1>
-      <div class="subtitle" id="pageSubtitle">Source: CL-D-1000-0001 Functional Training Plans</div>
+      <h1 id="pageTitle">Quality Control — Olefins &amp; UT</h1>
+      <div class="subtitle" id="pageSubtitle">Source: CL-D-1000-0001 Functional Training Plan for Olefins &amp; UT</div>
     </div>
     <div class="header-actions">
       <select id="progressScopeSelect" title="Which courses count toward every completion %, Progress column, and overdue Flag section-wide — dashboard tiles, People table, and Export Report. 'Probation progress (Ph.1+2)' — the default — never counts Phase 3 (Continuing Plan) courses, so a Phase-3 course (base or newly added) will never show as overdue here until you switch to 'Full progress (all phases)'.">
@@ -430,8 +430,6 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
 <a href="#/manage-methods" class="btn small dash-only-action" id="openMethodsAdmin">Manage test methods</a>
       <button class="btn small dash-only-action" id="openDashMethodsImport" title="Bulk-update test-method Complete Date / Re-Training Date AND Planner/Schedule course status, for every matching person found in one Excel file — any position, not just Analysts">Import test results (Excel)</button>
       <input type="file" id="dashMethodsImportFile" accept=".xlsx,.xls" style="display:none">
-      <button class="btn small dash-only-action" id="openEmployeeImport" title="Import the current active employee roster from Excel without replacing existing training progress or history">Import employee list</button>
-      <input type="file" id="employeeImportFile" accept=".xlsx,.xls" style="display:none">
       <button class="btn small dash-only-action" id="openPwdSet" title="Set or change the admin password">🔒</button>
       <span class="save-chip dash-only-action" id="saveChip" data-state="idle">Connecting…</span>
     </div>
@@ -568,7 +566,7 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
     poly_pal:        { label:"QC Analyst \u2014 PAL", sectionKey:"polyolefins", courseKey:"poly_pal" },
     poly_daytime:    { label:"QC Analyst \u2014 Daytime", sectionKey:"polyolefins", courseKey:"poly_daytime" },
   };
-  const POSITION_ORDER = ["dept_manager", "qa_sm", "qa_lead_eng", "qa_senior_eng", "qa_eng", "sm", "ss", "lead_eng", "senior_eng", "gas", "oil", "utility", "poly_sm", "poly_ss", "poly_lead_eng", "poly_senior_eng", "poly_eng", "poly_pcl", "poly_pal", "poly_daytime"];
+  const POSITION_ORDER = ["sm", "ss", "lead_eng", "senior_eng", "gas", "oil", "utility"];
   const EXPANDED_POSITION_ORDER = [
     "dept_manager",
     "qa_sm","qa_lead_eng","qa_senior_eng","qa_eng",
@@ -605,6 +603,7 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
     const pc = posColor(pk);
     return `<span class="pos-pill" style="background:${pc.soft};color:${pc.ink}">${esc(label)}</span>`;
   }
+  function isInCurrentScope(person){ return !!(person && POSITION_ORDER.includes(person.positionKey)); }
 
   let STATE = { people: {}, courseEdits: {}, customCourses: [], methods: {} };
 
@@ -790,7 +789,7 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
   let methodsImportReview = null;
   let methodsImportError = "";        // shown on the Manage-test-methods toolbar when the file couldn't be read at all
 
-  const COURSE_KEY_ORDER = ["dept_manager","qa_sm","qa_lead","qa_eng","sm","ss","eng","gas","oil","utility","poly_sm","poly_ss","poly_eng","poly_pcl","poly_pal","poly_daytime"];
+  const COURSE_KEY_ORDER = ["sm","ss","eng","gas","oil","utility"];
   const COURSE_KEY_LABELS = {
     dept_manager: "Department Manager",
     qa_sm: "QA Section Manager", qa_lead: "QA Lead Engineer", qa_eng: "QA Senior Engineer / QA Engineer",
@@ -1749,7 +1748,7 @@ COURSE_DATA.poly_pal = makePolyCourses(POLY_PAL_SOURCE, "poly_pal", 31);
   // Section-wide rollup (active people only), for the dashboard tile.
   function sectionMethodSummary(){
     const c = { people:0, assigned:0, overdue:0, retrain:0, due_first:0, due_soon:0, ok:0, stale:0, attention:0 };
-    Object.values(STATE.people).filter(isActive).forEach(p=>{
+    Object.values(STATE.people).filter(p=>isActive(p) && isInCurrentScope(p)).forEach(p=>{
       c.people++;
       const s = personMethodSummary(p);
       c.assigned += s.assigned; c.overdue += s.overdue; c.retrain += s.retrain;
@@ -2199,7 +2198,7 @@ COURSE_DATA.poly_pal = makePolyCourses(POLY_PAL_SOURCE, "poly_pal", 31);
 
     // Overview dashboard — one page: KPI row + status-composition donut + completion-by-position bar.
     const s = pres.addSlide();
-    pbiHeader(s, "Overall Results", "Overall Results", `Central Laboratory — ${total} active people · Progress basis: ${PROGRESS_SCOPES[scope].label}`);
+    pbiHeader(s, "Overall Results", "Overall Results", `Quality Control — Olefins & UT · ${total} active people · Progress basis: ${PROGRESS_SCOPES[scope].label}`);
     const rowY = pbiKpiRow(s, [
       { value:total, label:"Active people", accent:RPT_COLOR.teal },
       { value:`${avgPct}%`, label:`Avg. completion (${scopeShort})`, accent:RPT_COLOR.teal },
@@ -2346,11 +2345,11 @@ COURSE_DATA.poly_pal = makePolyCourses(POLY_PAL_SOURCE, "poly_pal", 31);
     const title = pres.addSlide();
     title.background = { color: RPT_COLOR.navy };
     title.addShape("rect", { x:0, y:0, w:13.33, h:0.18, fill:{color:RPT_COLOR.teal} });
-    title.addText("Central Laboratory Department", { x:0.8, y:2.5, w:11.7, h:1.0, fontFace:RPT_FONT_TITLE, fontSize:40, bold:true, color:RPT_COLOR.white });
+    title.addText("Quality Control — Olefins & UT", { x:0.8, y:2.5, w:11.7, h:1.0, fontFace:RPT_FONT_TITLE, fontSize:40, bold:true, color:RPT_COLOR.white });
     title.addText("Onboarding & Qualification Training Report", { x:0.8, y:3.45, w:11.7, h:0.6, fontFace:RPT_FONT_BODY, fontSize:20, color:RPT_COLOR.tealLight });
     title.addText(`Long Son Petrochemicals Central Laboratory  •  Generated ${fmtDate(new Date())}`, { x:0.8, y:6.6, w:11.7, h:0.4, fontFace:RPT_FONT_BODY, fontSize:13, color:RPT_COLOR.muted });
 
-    const active = Object.values(STATE.people).filter(isActive);
+    const active = Object.values(STATE.people).filter(p=>isActive(p) && isInCurrentScope(p));
     if(scopes.includes("overall")) rptBuildOverall(pres, active, progressScope);
     if(scopes.includes("newcomers")) rptBuildNewcomers(pres, active, progressScope);
     if(scopes.includes("rotated")) rptBuildRotated(pres, active, progressScope);
@@ -2398,7 +2397,7 @@ async function buildAndDownloadExcelReport(){
   const wb = new ExcelJS.Workbook();
   wb.creator = "Olefins Onboarding Tracker";
   wb.created = new Date();
-  const active = Object.values(STATE.people).filter(isActive).slice().sort((a,b)=>{
+  const active = Object.values(STATE.people).filter(p=>isActive(p) && isInCurrentScope(p)).slice().sort((a,b)=>{
     const oa = POSITION_ORDER.indexOf(a.positionKey), ob = POSITION_ORDER.indexOf(b.positionKey);
     if(oa!==ob) return oa-ob;
     return (a.startDate||"").localeCompare(b.startDate||"");
@@ -2407,7 +2406,7 @@ async function buildAndDownloadExcelReport(){
   const sum = wb.addWorksheet("Summary", { properties: { tabColor: { argb:"FF0D9488" } } });
   sum.columns = [{width:30},{width:16},{width:20},{width:18}];
   sum.mergeCells("A1:D1");
-  sum.getCell("A1").value = "Central Laboratory Department — Onboarding & Qualification Training Report";
+  sum.getCell("A1").value = "Quality Control — Olefins & UT Onboarding & Qualification Training Report";
   sum.getCell("A1").font = { size:14, bold:true, color:{argb:"FFFFFFFF"} };
   sum.getCell("A1").fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FF0B1F3A"} };
   sum.getCell("A1").alignment = { vertical:"middle" };
@@ -2559,7 +2558,7 @@ async function buildAndDownloadExcelReport(){
   // visible in the People table (see the Employment filter) so their record isn't lost, just excluded
   // from the numbers.
   function sectionSummary(){
-    const people = Object.values(STATE.people).filter(isActive);
+    const people = Object.values(STATE.people).filter(p=>isActive(p) && isInCurrentScope(p));
     let total=0, passed=0, overdue=0, inprog=0;
     people.forEach(p=>{ const pr=personProgressScoped(p, progressScope); total+=pr.total; passed+=pr.passed; overdue+=pr.overdue; inprog+=pr.in_progress; });
     const pct = total? Math.round(passed/total*100) : 0;
@@ -2570,7 +2569,7 @@ async function buildAndDownloadExcelReport(){
   // for the tile drill-down.
   function sectionCourseRows(statusKey){
     const rows = [];
-    Object.entries(STATE.people).filter(([id,p])=>isActive(p)).forEach(([id,p])=>{
+    Object.entries(STATE.people).filter(([id,p])=>isActive(p) && isInCurrentScope(p)).forEach(([id,p])=>{
       const phase3WeekMap = phase3WeekMapFor(p.positionKey, positionRefDate(p));
       personCourseSet(p, progressScope).forEach(it=>{
         const ist = itemState(p, it.id);
@@ -2624,7 +2623,7 @@ async function buildAndDownloadExcelReport(){
   }
 
   function renderPositionGrid(){
-    const people = Object.values(STATE.people).filter(isActive);
+    const people = Object.values(STATE.people).filter(p=>isActive(p) && isInCurrentScope(p));
     return `<div class="pos-grid">${POSITION_ORDER.map(pk=>{
       const mine = people.filter(p=>p.positionKey===pk);
       let pct = null;
@@ -2643,7 +2642,7 @@ async function buildAndDownloadExcelReport(){
   }
 
   function filteredPeople(){
-    let people = Object.entries(STATE.people).map(([id,p])=>Object.assign({id}, p));
+    let people = Object.entries(STATE.people).filter(([,p])=>isInCurrentScope(p)).map(([id,p])=>Object.assign({id}, p));
     if(dashFilters.employment!=="all") people = people.filter(p=> dashFilters.employment==="resigned" ? !isActive(p) : isActive(p));
     if(dashFilters.position!=="all") people = people.filter(p=>p.positionKey===dashFilters.position);
     if(dashFilters.search){
@@ -2670,8 +2669,8 @@ async function buildAndDownloadExcelReport(){
   }
 
   function renderFilterBar(){
-    const total = Object.keys(STATE.people).length;
-    const resignedCount = Object.values(STATE.people).filter(p=>!isActive(p)).length;
+    const total = Object.values(STATE.people).filter(isInCurrentScope).length;
+    const resignedCount = Object.values(STATE.people).filter(p=>isInCurrentScope(p) && !isActive(p)).length;
     const nonDefault = dashFilters.position!=='all'||dashFilters.flag!=='all'||dashFilters.search||dashFilters.employment!=='active'||dashFilters.personStatus!=='all'||dashFilters.methods!=='all';
     return `<div class="filter-bar">
       <div class="filters">
@@ -2750,7 +2749,7 @@ async function buildAndDownloadExcelReport(){
   }
 
   function renderPeopleTable(){
-    const allCount = Object.keys(STATE.people).length;
+    const allCount = Object.values(STATE.people).filter(isInCurrentScope).length;
     const people = filteredPeople();
     if(allCount===0){
       return `<div class="empty-state">
@@ -2767,9 +2766,10 @@ async function buildAndDownloadExcelReport(){
     const allSelected = people.length>0 && people.every(p=>selectedPeopleIds.has(p.id));
     return `<div class="gantt-scroll"><table class="people">
       <thead><tr>
+        <th style="width:44px;text-align:center">#</th>
         <th class="chk-col"><input type="checkbox" id="selectAllVisible" ${allSelected?'checked':''}></th>
         <th>Name</th><th>Employee ID</th><th>Position</th><th>Start date</th><th>Status</th><th>Progress (${esc(PROGRESS_SCOPES[progressScope].short)})</th><th title="Course progress and test-method re-evaluation status (CL-D-1000-0010) combined into one worst-first signal">Flag</th><th></th></tr></thead>
-      <tbody>${people.map(p=>{
+      <tbody>${people.map((p,rowIndex)=>{
         const pr = personProgressScoped(p, progressScope);
         const active = isActive(p);
         const msum = personMethodSummary(p);
@@ -2780,6 +2780,7 @@ async function buildAndDownloadExcelReport(){
         const rStatus = resolvedPersonStatus(p);
         const statusCell = `<span class="flag-chip status-${rStatus}">${esc(PERSON_STATUS_LABELS[rStatus])}</span>${p.statusOverride?' <span class="hint" style="font-size:11px">· manual</span>':''}${rStatus==='rotation'&&rotationFromTo(p)?`<div class="hint" style="font-size:11px">${esc(rotationFromTo(p))}</div>`:''}`;
         return `<tr${active?'':' class="row-resigned"'}>
+          <td class="mono" style="width:44px;text-align:center">${rowIndex+1}</td>
           <td class="chk-col"><input type="checkbox" class="rowSelect" data-id="${p.id}" ${selectedPeopleIds.has(p.id)?'checked':''}></td>
           <td class="name"><a class="person-link" href="#/person/${encodeURIComponent(p.id)}">${esc(p.name)}</a></td>
           <td class="mono">${p.employeeId?esc(p.employeeId):'—'}</td>
@@ -3293,15 +3294,13 @@ async function buildAndDownloadExcelReport(){
       ${dashImportMsg ? `<div class="hint" id="dashMethodsImportMsg" style="white-space:pre-line;padding:10px 14px;margin:0 0 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2, rgba(0,0,0,.03))">${esc(dashImportMsg)} <button class="btn small" id="dismissDashImportMsg" style="margin-left:8px">Dismiss</button></div>` : ''}
       ${renderDashboardTiles()}
       ${renderDrillPanel()}
-      <section class="panel">
-        <div class="panel-head"><h2>By position</h2><div class="meta">Click a card to filter below</div></div>
-        ${renderPositionGrid()}
-      </section>
       ${renderCompareSummary()}
       <section class="panel">
         <div class="people-toolbar">
           <h2 style="font-size:15px;margin:0;">People</h2>
           <button class="btn primary" id="toggleAddForm">${addFormOpen?'Close':'+ Add newcomer'}</button>
+          <button class="btn" id="openEmployeeImport" title="Import the current active employee roster from Excel without replacing existing training progress or history">Import employee list</button>
+          <input type="file" id="employeeImportFile" accept=".xlsx,.xls" style="display:none">
         </div>
         ${renderAddForm()}
         ${renderFilterBar()}
@@ -3887,7 +3886,7 @@ async function buildAndDownloadExcelReport(){
   function findPersonByName(name){
     const q = normalizeNameForMatch(name);
     if(!q) return null;
-    return Object.values(STATE.people).find(p=> normalizeNameForMatch(p.name)===q) || null;
+    return Object.values(STATE.people).find(p=>isInCurrentScope(p) && normalizeNameForMatch(p.name)===q) || null;
   }
   function applyMethodsImportRow(person, methodId, completeISO, retrainISO){
     if(!person.methods) person.methods = {};
@@ -4206,7 +4205,7 @@ async function buildAndDownloadExcelReport(){
         const sub=subCol>=0?cleanEmployeeCell(row[subCol]):"";
         const positionKey=employeePositionKey(section,position,sub);
         const record={name,employeeId,section,position,sub,positionKey,rowNumber:headerIndex+offset+2};
-        if(positionKey) records.push(record); else unsupported.push(record);
+        if(positionKey && POSITION_ORDER.includes(positionKey)) records.push(record); else unsupported.push(record);
       });
     });
     return {records,unsupported};
@@ -4258,7 +4257,7 @@ async function buildAndDownloadExcelReport(){
         const parsed=parseEmployeeListWorkbook(wb);
         if(!parsed.records.length) throw new Error("No employee rows with recognized positions were found.");
         const preview=employeeImportPreview(parsed);
-        const warning=parsed.unsupported.length?`\n\n${parsed.unsupported.length} row(s) have an unrecognized position and will be skipped.`:"";
+        const warning=parsed.unsupported.length?`\n\n${parsed.unsupported.length} row(s) are outside this tracker's current scope or have an unrecognized position and will be skipped.`:"";
         const approved=window.confirm(`Employee list preview\n\n${parsed.records.length} active employee(s) recognized\n${preview.added} new employee(s) to add\n${preview.matched} existing employee(s) matched and preserved\n${preview.positionChanges} matched employee position change(s)\n\nExisting course progress, methods, notes, start dates, and position history will be preserved. New employees will have a blank Start Date.${warning}\n\nApply this employee list?`);
         if(!approved){ dashImportMsg=`Employee-list import from "${file.name}" was cancelled. Nothing changed.`; paint(); return; }
         const applied=applyEmployeeImport(parsed);
@@ -4314,14 +4313,14 @@ async function buildAndDownloadExcelReport(){
       : view==="methods-admin" ? "Manage Test Methods"
       : view==="plan-import-review" ? "Review Plan Revision"
       : view==="methods-import-review" ? "Review Method List"
-      : "Central Laboratory — Onboarding & Qualification";
+      : "Quality Control — Olefins & UT";
     document.getElementById("pageSubtitle").textContent = view==="person"
-      ? "Source: CL-D-1000-0001 Functional Training Plan for the selected position"
+      ? "Source: CL-D-1000-0001 Functional Training Plan for Olefins & UT"
       : view==="admin" ? "Add, edit, or retire courses — shared across positions where the same course applies, with a dated, scoped effective date for each change"
       : view==="methods-admin" ? "Source: CL-D-1000-0010 Competency evaluation list for testing method (Rev.08)"
       : view==="plan-import-review" ? "Nothing is saved until you click Apply below"
       : view==="methods-import-review" ? "Nothing is saved until you click Apply below"
-      : "Department-wide onboarding dashboard — Department Manager, Quality Assurance, QC Olefins & UT, and QC Polyolefins";
+      : "Olefins & UT onboarding dashboard — Section Manager, Supervisor, Lead/Senior Engineer, and Gas/Oil/Utility Analysts";
     document.getElementById("root").innerHTML = view==="person" ? renderPersonView() : view==="admin" ? renderAdminView() : view==="methods-admin" ? renderMethodsAdminView() : view==="plan-import-review" ? renderPlanImportReviewView() : view==="methods-import-review" ? renderMethodsImportReviewView() : renderDashboard();
     document.getElementById("footNote").innerHTML = footNote();
     attachHandlers();
@@ -4364,6 +4363,14 @@ async function buildAndDownloadExcelReport(){
     root.querySelectorAll('.date-edit').forEach(wireDateEditEl);
 
     if(view==="dashboard"){
+      const openEmployeeImportBtn = document.getElementById("openEmployeeImport");
+      const employeeImportFileInput = document.getElementById("employeeImportFile");
+      if(openEmployeeImportBtn && employeeImportFileInput) openEmployeeImportBtn.addEventListener("click", ()=>{ employeeImportFileInput.click(); });
+      if(employeeImportFileInput) employeeImportFileInput.addEventListener("change", ()=>{
+        const file = employeeImportFileInput.files && employeeImportFileInput.files[0];
+        if(file) handleEmployeeImportFile(file);
+        employeeImportFileInput.value = "";
+      });
       const dismissDashImportMsgBtn = document.getElementById("dismissDashImportMsg");
       if(dismissDashImportMsgBtn) dismissDashImportMsgBtn.addEventListener("click", ()=>{ dashImportMsg=""; paint(); });
       const toggleBtn = document.getElementById("toggleAddForm");
@@ -5414,15 +5421,6 @@ function applyRouteFromHash(){
     const file = dashMethodsImportFileInput.files && dashMethodsImportFileInput.files[0];
     if(file) handleDashMethodsImportFile(file);
     dashMethodsImportFileInput.value = "";
-  });
-
-  const openEmployeeImportBtn = document.getElementById("openEmployeeImport");
-  const employeeImportFileInput = document.getElementById("employeeImportFile");
-  if(openEmployeeImportBtn && employeeImportFileInput) openEmployeeImportBtn.addEventListener("click", ()=>{ employeeImportFileInput.click(); });
-  if(employeeImportFileInput) employeeImportFileInput.addEventListener("change", ()=>{
-    const file = employeeImportFileInput.files && employeeImportFileInput.files[0];
-    if(file) handleEmployeeImportFile(file);
-    employeeImportFileInput.value = "";
   });
 
   // Admin gate + password-set modal controls (static shell, wired once — see comment above).
