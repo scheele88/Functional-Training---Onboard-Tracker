@@ -1,51 +1,34 @@
-## CENTRAL-LAB-SCOPE-001 — Central Laboratory Scope Expansion
+### Approved curriculum source mapping
 
-Date: [enter current date]
+#### Department Manager
 
-### Objective
+- Source sheet: HR-F-3000-003 Rev 00
+- Position: Central Laboratory Department Manager
+- Source revision used: Rev.0 as shown in the workbook header
+- Sheet1: Reference list only; not imported as a separate curriculum
 
-Expand the existing tracker from QC – Olefins & UT into one combined Central Laboratory tracker with section filters.
+#### Quality Assurance
 
-### Existing verified scope
+- SM: Quality Assurance Section Manager
+- Lead QA: Lead Quality Assurance Engineer
+- QA Eng: Senior Quality Assurance Engineer / Quality Assurance Engineer
+- Source revision used: Rev.01
 
-- Quality Control – Olefins & UT
+#### Quality Control – Polyolefins
 
-### New scope
+- SM: QC Section Manager — Polyolefins
+- SS: QC Supervisor — Polyolefins
+- ENG: QC Lead Engineer / QC Senior Engineer / QC Engineer — Polyolefins
+- QC Analyst - PCL: QC Analyst — PCL
+- QC Analyst - PAL: QC Analyst — PAL
+- QC Analyst - Daytime: QC Analyst — Daytime
+- Source revision used: Rev.02
 
-- Department Manager
-- Quality Assurance
-- Quality Control – Polyolefins
+#### Excluded from the first expansion
 
-### Architecture decision
-
-Use one combined application with section filters, position-specific curricula, and section-specific test-method relevance.
-
-### Organization
-
-- Central Laboratory Department
-  - Department Manager
-  - Quality Assurance Section
-  - Quality Control – Olefins & UT Section
-  - Quality Control – Polyolefins Section
-
-### Document prefix examples
-
-- P — Procedure
-- T — Test Method
-- W — Work Instruction
-- D — Support Document
-- M — Manual
-- Other prefixes may exist and must remain valid.
-
-### Scope-number classification
-
-- 1000 — General / Lab-wide
-- 2000 — Gas / QC – Olefins & UT
-- 3000 — Oil / QC – Olefins & UT
-- 4000 — Utility / QC – Olefins & UT
-- 5000 — PCL / QC – Polyolefins
-- 6000 — PAL / QC – Polyolefins
-
-### Status
-
-Planning started. No code or database changes made.
+- Rev.01 duplicate Polyolefins sheets
+- Helper
+- TECH-Shift PCL
+- TECH-Day PCL
+- TECH-PAL
+- Other technician/support sheets
