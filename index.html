@@ -566,7 +566,7 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
     poly_pal:        { label:"QC Analyst \u2014 PAL", sectionKey:"polyolefins", courseKey:"poly_pal" },
     poly_daytime:    { label:"QC Analyst \u2014 Daytime", sectionKey:"polyolefins", courseKey:"poly_daytime" },
   };
-  const POSITION_ORDER = ["sm", "ss", "lead_eng", "senior_eng", "gas", "oil", "utility"];
+  const POSITION_ORDER = ["dept_manager", "sm", "ss", "lead_eng", "senior_eng", "gas", "oil", "utility"];
   const EXPANDED_POSITION_ORDER = [
     "dept_manager",
     "qa_sm","qa_lead_eng","qa_senior_eng","qa_eng",
@@ -577,6 +577,7 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
   // A distinct hue per position — used to color-code position pills/cards throughout the dashboard
   // so the 7 tracks read apart at a glance instead of every position looking the same neutral grey.
   const POSITION_COLORS = {
+    dept_manager:{ c:"#334155", soft:"#E2E8F0", ink:"#1E293B" },
     sm:         { c:"#4F46E5", soft:"#EAE8FD", ink:"#4338CA" },  // indigo — section leadership
     ss:         { c:"#0E9AAE", soft:"#DFF4F6", ink:"#0B7686" },  // teal
     lead_eng:   { c:"#7C3AED", soft:"#F1E8FE", ink:"#6226C4" },  // violet
@@ -775,8 +776,9 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
   let methodsImportReview = null;
   let methodsImportError = "";        // shown on the Manage-test-methods toolbar when the file couldn't be read at all
 
-  const COURSE_KEY_ORDER = ["sm","ss","eng","gas","oil","utility"];
+  const COURSE_KEY_ORDER = ["dept_manager","sm","ss","eng","gas","oil","utility"];
   const COURSE_KEY_LABELS = {
+    dept_manager: "Department Manager",
     sm: "Section Manager", ss: "Supervisor (SS)", eng: "Lead / Senior / QC Engineer",
     gas: "Analyst — Gas", oil: "Analyst — Oil", utility: "Analyst — Utility"
   };
@@ -3219,7 +3221,7 @@ async function buildAndDownloadExcelReport(){
       ${renderDashboardTiles()}
       ${renderDrillPanel()}
       <section class="panel">
-        <div class="panel-head"><h2>By position</h2><div class="meta">Excludes Department Manager · click a card to filter below</div></div>
+        <div class="panel-head"><h2>By position</h2><div class="meta">Click a card to filter below</div></div>
         ${renderPositionGrid()}
       </section>
       ${renderCompareSummary()}
