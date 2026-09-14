@@ -3320,13 +3320,14 @@ async function buildAndDownloadExcelReport(){
     return "upcoming";
   }
   function phaseLabel(phaseKey){ return phaseKey==="p1"?"P1":phaseKey==="p2"?"P2":"P3"; }
-  function renderScheduleRow(item, ist, status, target, trailingHtml){
+  function renderScheduleRow(item, ist, status, target, trailingHtml, rowNumber){
     const overdue = status==="overdue";
     const typeCls = item.type.indexOf("Test")===0 ? "type-test" : "type-doc";
     const targetCell = ist.status==="Passed"
       ? `<span class="locked-date">${target?fmtDate(target):'—'}</span>`
       : dateEditHtml(`data-field="target" data-id="${item.id}"`, target?toISO(target):"");
     return `<tr data-id="${item.id}" data-phase="${item.phaseKey}">
+      <td class="mono" style="width:44px;text-align:center">${rowNumber}</td>
       <td class="code" title="${esc(courseDisplayCode(item))}">${esc(courseDisplayCode(item))}</td>
       <td class="course">
         <div class="name" title="${esc(courseDisplayTopic(item))}">${esc(truncate(courseDisplayTopic(item),58))}</div>
@@ -3351,8 +3352,9 @@ async function buildAndDownloadExcelReport(){
     const p3 = items.filter(it=>it.phaseKey==="p4").slice().sort((a,b)=>a.no-b.no);
     const weekMap = phase3ApproxWeeks(meta, items);
     let lastPhase = null;
-    const colspan = 4 + totalWeeks;
+    const colspan = 5 + totalWeeks;
     const out = [];
+    let rowNumber = 0;
 
     p1p2.forEach(item=>{
       if(item.phaseKey!==lastPhase){
@@ -3366,7 +3368,7 @@ async function buildAndDownloadExcelReport(){
       const ist = itemState(person, item.id);
       const status = computeStatus(item, ist, positionRefDate(person), weekMap);
       const target = targetDateStr(item, ist, positionRefDate(person), weekMap);
-      out.push(renderScheduleRow(item, ist, status, target, weekCells(item, status, totalWeeks)));
+      out.push(renderScheduleRow(item, ist, status, target, weekCells(item, status, totalWeeks), ++rowNumber));
     });
 
     if(p3.length){
@@ -3381,7 +3383,7 @@ async function buildAndDownloadExcelReport(){
         const status = computeStatusForTarget(ist, target);
         const monthLabel = phase3MonthLabel(meta, approxWeek);
         const bar = `<td class="wk-cell continuing-cell" colspan="${totalWeeks}"><span class="continuing-bar st-${status}" title="Source plan bucket: ${esc(item.postLabel||'—')}">${esc(monthLabel)}</span></td>`;
-        out.push(renderScheduleRow(item, ist, status, target, bar));
+        out.push(renderScheduleRow(item, ist, status, target, bar, ++rowNumber));
       });
     }
     return out.join("");
@@ -3463,6 +3465,7 @@ async function buildAndDownloadExcelReport(){
         <div class="gantt-scroll">
           <table class="gantt">
             <thead><tr>
+              <th style="width:44px;text-align:center">#</th>
               <th class="code">Code</th>
               <th class="course">Course</th>
               <th style="width:132px">Status</th>
