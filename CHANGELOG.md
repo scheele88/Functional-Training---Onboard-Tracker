@@ -1,22 +1,51 @@
-## v3.23 — Person-page Save Confirmation Completed
+## CENTRAL-LAB-SCOPE-001 — Central Laboratory Scope Expansion
 
-### Completed
+Date: [enter current date]
 
-- Name and Employee ID changes are detected immediately.
-- Status and Notes changes are held as drafts.
-- Position changes are held as drafts.
-- The Change Position modal no longer saves directly.
-- Save Changes commits the complete current person record.
-- Discard Changes restores the original person record.
-- Browser refresh warns when unsaved changes exist.
-- No database migration was required.
+### Objective
 
-### Verification
+Expand the existing tracker from QC – Olefins & UT into one combined Central Laboratory tracker with section filters.
 
-- Save multiple fields together: Passed
-- Discard multiple fields together: Passed
-- Refresh before saving: Passed
-- Cancel refresh: Passed
-- Position change without main Save: Passed
-- Position change with main Save: Passed
-- Console errors: None observed
+### Existing verified scope
+
+- Quality Control – Olefins & UT
+
+### New scope
+
+- Department Manager
+- Quality Assurance
+- Quality Control – Polyolefins
+
+### Architecture decision
+
+Use one combined application with section filters, position-specific curricula, and section-specific test-method relevance.
+
+### Organization
+
+- Central Laboratory Department
+  - Department Manager
+  - Quality Assurance Section
+  - Quality Control – Olefins & UT Section
+  - Quality Control – Polyolefins Section
+
+### Document prefix examples
+
+- P — Procedure
+- T — Test Method
+- W — Work Instruction
+- D — Support Document
+- M — Manual
+- Other prefixes may exist and must remain valid.
+
+### Scope-number classification
+
+- 1000 — General / Lab-wide
+- 2000 — Gas / QC – Olefins & UT
+- 3000 — Oil / QC – Olefins & UT
+- 4000 — Utility / QC – Olefins & UT
+- 5000 — PCL / QC – Polyolefins
+- 6000 — PAL / QC – Polyolefins
+
+### Status
+
+Planning started. No code or database changes made.
