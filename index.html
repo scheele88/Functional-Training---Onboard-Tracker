@@ -430,6 +430,8 @@ table.people td.name a.person-link:hover{ color:var(--accent); }
 <a href="#/manage-methods" class="btn small dash-only-action" id="openMethodsAdmin">Manage test methods</a>
       <button class="btn small dash-only-action" id="openDashMethodsImport" title="Bulk-update test-method Complete Date / Re-Training Date AND Planner/Schedule course status, for every matching person found in one Excel file — any position, not just Analysts">Import test results (Excel)</button>
       <input type="file" id="dashMethodsImportFile" accept=".xlsx,.xls" style="display:none">
+      <button class="btn small dash-only-action" id="openEmployeeImport" title="Import the current active employee roster from Excel without replacing existing training progress or history">Import employee list</button>
+      <input type="file" id="employeeImportFile" accept=".xlsx,.xls" style="display:none">
       <button class="btn small dash-only-action" id="openPwdSet" title="Set or change the admin password">🔒</button>
       <span class="save-chip dash-only-action" id="saveChip" data-state="idle">Connecting…</span>
     </div>
@@ -4151,6 +4153,126 @@ async function buildAndDownloadExcelReport(){
     reader.readAsArrayBuffer(file);
   }
 
+  function employeePositionKey(section, position, sub){
+    const sec = String(section||"").trim().toLowerCase();
+    const pos = String(position||"").trim().toLowerCase();
+    const specialty = String(sub||"").trim().toLowerCase();
+    if(pos==="dm" || sec.indexOf("department manager")>=0) return "dept_manager";
+    if(sec==="qa"){
+      if(pos==="sm") return "qa_sm";
+      if(pos.indexOf("lead")>=0) return "qa_lead_eng";
+      if(pos.indexOf("senior")>=0) return "qa_senior_eng";
+      if(pos.indexOf("eng")>=0) return "qa_eng";
+    }
+    if(sec.indexOf("polyolefin")>=0){
+      if(pos==="sm") return "poly_sm";
+      if(pos.indexOf("supervisor")>=0) return "poly_ss";
+      if(pos.indexOf("lead")>=0) return "poly_lead_eng";
+      if(pos.indexOf("senior")>=0 && pos.indexOf("eng")>=0) return "poly_senior_eng";
+      if(pos.indexOf("eng")>=0) return "poly_eng";
+      if(pos.indexOf("analyst")>=0 && specialty==="pcl") return "poly_pcl";
+      if(pos.indexOf("analyst")>=0 && specialty==="pal") return "poly_pal";
+      if(pos.indexOf("analyst")>=0 && specialty.indexOf("day")>=0) return "poly_daytime";
+    }
+    if(sec.indexOf("oleifn")>=0 || sec.indexOf("olefin")>=0 || sec.indexOf("ut")>=0){
+      if(pos==="sm") return "sm";
+      if(pos.indexOf("supervisor")>=0) return "ss";
+      if(pos.indexOf("lead")>=0) return "lead_eng";
+      if(pos.indexOf("senior")>=0 && pos.indexOf("eng")>=0) return "senior_eng";
+      if(pos.indexOf("eng")>=0) return "senior_eng";
+      if(pos.indexOf("analyst")>=0 && specialty==="gas") return "gas";
+      if(pos.indexOf("analyst")>=0 && specialty==="oil") return "oil";
+      if(pos.indexOf("analyst")>=0 && specialty.indexOf("util")>=0) return "utility";
+    }
+    return "";
+  }
+  function cleanEmployeeCell(value){ return String(value==null?"":value).replace(/\s+/g," ").trim(); }
+  function usableEmployeeId(value){ const id=cleanEmployeeCell(value); return id && !/x/i.test(id); }
+  function parseEmployeeListWorkbook(wb){
+    const records = [], unsupported = [];
+    wb.SheetNames.forEach(sheetName=>{
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {header:1, raw:false, defval:""});
+      const headerIndex = rows.findIndex(row=>row.some(cell=>/^employee id$/i.test(cleanEmployeeCell(cell))) && row.some(cell=>/^name$/i.test(cleanEmployeeCell(cell))));
+      if(headerIndex<0) return;
+      const headers = rows[headerIndex].map(cleanEmployeeCell);
+      const col = label=>headers.findIndex(h=>h.toLowerCase()===label.toLowerCase());
+      const employeeIdCol=col("Employee ID"), nameCol=col("Name"), sectionCol=col("Section"), positionCol=col("Position"), subCol=col("Sub");
+      rows.slice(headerIndex+1).forEach((row,offset)=>{
+        const name=cleanEmployeeCell(row[nameCol]);
+        if(!name) return;
+        const employeeId=cleanEmployeeCell(row[employeeIdCol]);
+        const section=cleanEmployeeCell(row[sectionCol]);
+        const position=cleanEmployeeCell(row[positionCol]);
+        const sub=subCol>=0?cleanEmployeeCell(row[subCol]):"";
+        const positionKey=employeePositionKey(section,position,sub);
+        const record={name,employeeId,section,position,sub,positionKey,rowNumber:headerIndex+offset+2};
+        if(positionKey) records.push(record); else unsupported.push(record);
+      });
+    });
+    return {records,unsupported};
+  }
+  function findEmployeeImportMatch(record){
+    if(usableEmployeeId(record.employeeId)){
+      const wanted=record.employeeId.toLowerCase();
+      const byId=Object.entries(STATE.people).find(([,p])=>usableEmployeeId(p.employeeId) && String(p.employeeId).trim().toLowerCase()===wanted);
+      if(byId) return byId;
+    }
+    const wantedName=normalizeNameForMatch(record.name);
+    return Object.entries(STATE.people).find(([,p])=>normalizeNameForMatch(p.name)===wantedName) || null;
+  }
+  function employeeImportPreview(parsed){
+    let added=0, matched=0, positionChanges=0;
+    parsed.records.forEach(record=>{
+      const match=findEmployeeImportMatch(record);
+      if(match){ matched++; if(match[1].positionKey!==record.positionKey) positionChanges++; }
+      else added++;
+    });
+    return {added,matched,positionChanges};
+  }
+  function applyEmployeeImport(parsed){
+    let added=0,updated=0;
+    parsed.records.forEach(record=>{
+      const match=findEmployeeImportMatch(record);
+      if(match){
+        const person=match[1];
+        person.name=record.name;
+        if(record.employeeId && (!person.employeeId || usableEmployeeId(record.employeeId))) person.employeeId=record.employeeId;
+        person.positionKey=record.positionKey;
+        person.employmentStatus="Active";
+        person.endDate="";
+        if(person.positionEffectiveDate===undefined) person.positionEffectiveDate=person.startDate||"";
+        updated++;
+      }else{
+        const id=newPersonId();
+        STATE.people[id]={name:record.name,employeeId:record.employeeId,positionKey:record.positionKey,startDate:"",notes:"Imported from Employee List.xlsx",items:{},createdAt:todayISO(),positionEffectiveDate:"",positionHistory:[],employmentStatus:"Active",endDate:"",statusOverride:"",methods:{}};
+        added++;
+      }
+    });
+    return {added,updated};
+  }
+  function handleEmployeeImportFile(file){
+    const reader=new FileReader();
+    reader.onload=e=>{
+      try{
+        const wb=XLSX.read(new Uint8Array(e.target.result),{type:"array"});
+        const parsed=parseEmployeeListWorkbook(wb);
+        if(!parsed.records.length) throw new Error("No employee rows with recognized positions were found.");
+        const preview=employeeImportPreview(parsed);
+        const warning=parsed.unsupported.length?`\n\n${parsed.unsupported.length} row(s) have an unrecognized position and will be skipped.`:"";
+        const approved=window.confirm(`Employee list preview\n\n${parsed.records.length} active employee(s) recognized\n${preview.added} new employee(s) to add\n${preview.matched} existing employee(s) matched and preserved\n${preview.positionChanges} matched employee position change(s)\n\nExisting course progress, methods, notes, start dates, and position history will be preserved. New employees will have a blank Start Date.${warning}\n\nApply this employee list?`);
+        if(!approved){ dashImportMsg=`Employee-list import from "${file.name}" was cancelled. Nothing changed.`; paint(); return; }
+        const applied=applyEmployeeImport(parsed);
+        dashImportMsg=`Employee list imported from "${file.name}": ${applied.added} added, ${applied.updated} existing record(s) updated/preserved${parsed.unsupported.length?`, ${parsed.unsupported.length} skipped`:''}. All imported employees are Active. Add missing Start Dates to calculate schedule target dates.`;
+        scheduleSave();
+        paint();
+      }catch(err){
+        dashImportMsg=`Could not read "${file.name}": ${err&&err.message?err.message:err}`;
+        paint();
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
   // ---------- paint / handlers ----------
   function footNote(){
     if(view==="person"){
@@ -5292,6 +5414,15 @@ function applyRouteFromHash(){
     const file = dashMethodsImportFileInput.files && dashMethodsImportFileInput.files[0];
     if(file) handleDashMethodsImportFile(file);
     dashMethodsImportFileInput.value = "";
+  });
+
+  const openEmployeeImportBtn = document.getElementById("openEmployeeImport");
+  const employeeImportFileInput = document.getElementById("employeeImportFile");
+  if(openEmployeeImportBtn && employeeImportFileInput) openEmployeeImportBtn.addEventListener("click", ()=>{ employeeImportFileInput.click(); });
+  if(employeeImportFileInput) employeeImportFileInput.addEventListener("change", ()=>{
+    const file = employeeImportFileInput.files && employeeImportFileInput.files[0];
+    if(file) handleEmployeeImportFile(file);
+    employeeImportFileInput.value = "";
   });
 
   // Admin gate + password-set modal controls (static shell, wired once — see comment above).
