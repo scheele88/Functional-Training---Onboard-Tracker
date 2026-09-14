@@ -2856,7 +2856,7 @@ async function buildAndDownloadExcelReport(){
       </tr>`;
     }).join("");
     return `<tr class="admin-edit-panel-row" data-admin-edit-root="${esc(norm)}">
-      <td colspan="8">
+      <td colspan="9">
         <div class="admin-add-form open" style="margin:6px 0">
           <div class="field"><label>Trainer</label><input type="text" class="admin-input" data-admin-edit-field="trainer" value="${esc(it.trainer||'')}" style="width:220px" placeholder="Job position in charge of training"></div>
           <div class="field"><label>Eval. method</label><input type="text" class="admin-input" data-admin-edit-field="evalMethod" value="${esc(it.evalMethod||'')}" style="width:90px" list="adminEditEvalMethodList" placeholder="e.g. WT, OJE"></div>
@@ -3001,9 +3001,9 @@ async function buildAndDownloadExcelReport(){
     });
     const phaseLabelFull = {p1:"Phase 1 — Orientation Essentials", p2:"Phase 2 — Critical Qualification (Probation)", p4:"Phase 3 — Continuing Plan"};
     let lastPhase = null;
-    const bodyRows = rows.map(it=>{
+    const bodyRows = rows.map((it, rowIndex)=>{
       let divider = "";
-      if(it.phaseKey!==lastPhase){ lastPhase = it.phaseKey; divider = `<tr class="admin-divider"><td colspan="8">${esc(phaseLabelFull[it.phaseKey]||'Other')}</td></tr>`; }
+      if(it.phaseKey!==lastPhase){ lastPhase = it.phaseKey; divider = `<tr class="admin-divider"><td colspan="9">${esc(phaseLabelFull[it.phaseKey]||'Other')}</td></tr>`; }
       const active = it.active!==false;
       const sharedKeys = curriculaSharingCode(it.code, key);
       const sharedBadge = sharedKeys.length
@@ -3016,6 +3016,7 @@ async function buildAndDownloadExcelReport(){
       const customPositionKeys = customEntry ? Object.keys(customEntry.positions||{}) : [];
       const rowClasses = [!active?'row-inactive':'', it._pending?'admin-pending-row':''].filter(Boolean).join(' ');
       const row = `<tr data-admin-id="${esc(it.id)}" data-admin-custom="${it.custom?'true':'false'}" data-admin-code="${esc(it.code)}"${rowClasses?` class="${rowClasses}"`:''}>
+        <td class="mono" style="width:44px;text-align:center">${rowIndex+1}</td>
         <td class="mono" style="font-size:11px">${esc(courseDisplayCode(it))}${sharedBadge?`<br>${sharedBadge}`:''}</td>
         <td><input type="text" class="admin-input" data-admin-field="topic" value="${esc(courseDisplayTopic(it))}"></td>
         <td>
@@ -3067,7 +3068,7 @@ async function buildAndDownloadExcelReport(){
         ${renderAdminAddForm()}
         ${renderAdminPendingBar()}
         <div class="gantt-scroll"><table class="people admin-table">
-          <thead><tr><th>Code</th><th>Topic</th><th>Type</th><th>Hours</th><th>Phase</th><th>Week / Bucket</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th style="width:44px;text-align:center">#</th><th>Code</th><th>Topic</th><th>Type</th><th>Hours</th><th>Phase</th><th>Week / Bucket</th><th>Status</th><th></th></tr></thead>
           <tbody>${bodyRows}</tbody>
         </table></div>
       </section>
@@ -3081,10 +3082,10 @@ async function buildAndDownloadExcelReport(){
       .filter(m=> !q || m.id.toLowerCase().indexOf(q)>=0 || (m.name||"").toLowerCase().indexOf(q)>=0)
       .sort((a,b)=>{ const ca = methodCategory(a.id), cb = methodCategory(b.id); if(ca!==cb) return ca.localeCompare(cb); return a.id.localeCompare(b.id); });
     let lastCat = null;
-    const bodyRows = methods.map(m=>{
+    const bodyRows = methods.map((m, rowIndex)=>{
       const cat = methodCategory(m.id);
       let catRow = "";
-      if(cat!==lastCat){ lastCat = cat; catRow = `<tr class="admin-divider"><td colspan="7">${esc(cat)}</td></tr>`; }
+      if(cat!==lastCat){ lastCat = cat; catRow = `<tr class="admin-divider"><td colspan="8">${esc(cat)}</td></tr>`; }
       const active = m.active!==false;
       // v3.22 — per the user ("each row can be edited easily without any warning or asking to
       // confirm"): a row's Name/Frequency/Re-eval type/Remarks are now plain read-only text until
@@ -3113,6 +3114,7 @@ async function buildAndDownloadExcelReport(){
            <button class="btn small" data-method-admin-toggle="${esc(m.id)}" data-method-admin-active="${active?'true':'false'}"${otherRowEditing?' disabled':''}>${active?'Deactivate':'Reactivate'}</button>`;
       const rowClasses = [!active?'row-inactive':'', editing?'admin-pending-row':''].filter(Boolean).join(' ');
       return `${catRow}<tr data-method-admin-id="${esc(m.id)}"${rowClasses?` class="${rowClasses}"`:''}>
+        <td class="mono" style="width:44px;text-align:center">${rowIndex+1}</td>
         <td class="mono" style="font-size:11px">${esc(m.id)}</td>
         <td>${nameCell}</td>
         <td>${freqCell}</td>
@@ -3147,8 +3149,8 @@ async function buildAndDownloadExcelReport(){
           <button class="btn" id="cancelNewMethod">Cancel</button>
         </div>` : ""}
         <div class="gantt-scroll"><table class="people admin-table">
-          <thead><tr><th>Doc No.</th><th>Test Method Name</th><th>Re-eval Frequency</th><th>Re-eval Type</th><th>Remarks</th><th>Status</th><th></th></tr></thead>
-          <tbody>${bodyRows || `<tr><td colspan="7" class="empty-state">No matches.</td></tr>`}</tbody>
+          <thead><tr><th style="width:44px;text-align:center">#</th><th>Doc No.</th><th>Test Method Name</th><th>Re-eval Frequency</th><th>Re-eval Type</th><th>Remarks</th><th>Status</th><th></th></tr></thead>
+          <tbody>${bodyRows || `<tr><td colspan="8" class="empty-state">No matches.</td></tr>`}</tbody>
         </table></div>
       </section>
     `;
@@ -3561,9 +3563,10 @@ async function buildAndDownloadExcelReport(){
   // basic all/completed/not-yet-completed split applies to BOTH courses and methods; the Analyst-only
   // re-evaluation-specific options (Overdue/Due soon/etc.) are method-only, and hide the course rows
   // while active, since "which courses are re-evaluation-overdue" isn't a question courses can answer.
-  function renderCourseRowUnified(item, ist, analyst){
+  function renderCourseRowUnified(item, ist, analyst, rowNumber){
     const typeCls = item.type.indexOf("Test")===0 ? "type-test" : "type-doc";
     return `<tr data-id="${item.id}">
+      <td class="mono" style="width:44px;text-align:center">${rowNumber}</td>
       <td class="mono" style="font-size:11px">${esc(courseDisplayCode(item))}</td>
       <td>
         <div class="name" title="${esc(courseDisplayTopic(item))}">${esc(truncate(courseDisplayTopic(item),58))}</div>
@@ -3582,7 +3585,7 @@ async function buildAndDownloadExcelReport(){
     // non-Analyst, so it's only computed — and only meaningful — here when analyst is true.
     const sum = analyst ? personMethodSummary(person) : null;
     const ui = personMethodsUi;
-    const colCount = analyst ? 7 : 4;
+    const colCount = analyst ? 8 : 5;
     // v3.17 — per the user, test methods with no connection to this position's own functional training
     // plan (e.g. Polyolefins-section methods showing up on an Olefins Supervisor's page) should never
     // appear at all, tickable or not: "I just want courses which actually belong to the functional
@@ -3626,7 +3629,7 @@ async function buildAndDownloadExcelReport(){
       courseItems = courseItems.filter(item=> (item.code||"").toLowerCase().indexOf(q)>=0 || (item.topic||"").toLowerCase().indexOf(q)>=0);
     }
     let lastPhase = null;
-    const courseRowsHtml = courseItems.map(item=>{
+    const courseRowsHtml = courseItems.map((item, rowIndex)=>{
       const ist = itemState(person, item.id);
       let phaseRow = "";
       if(item.phaseKey!==lastPhase){
@@ -3634,7 +3637,7 @@ async function buildAndDownloadExcelReport(){
         const label = item.phaseKey==="p1" ? "Phase 1 — Orientation Essentials" : item.phaseKey==="p2" ? "Phase 2 — Critical Qualification (Probation)" : "Phase 3 — Continuing Plan";
         phaseRow = `<tr class="admin-divider"><td colspan="${colCount}">${label}</td></tr>`;
       }
-      return phaseRow + renderCourseRowUnified(item, ist, analyst);
+      return phaseRow + renderCourseRowUnified(item, ist, analyst, rowIndex+1);
     }).join("");
     const coursesHeaderRow = courseFilterApplies ? `<tr class="admin-divider" style="font-weight:700"><td colspan="${colCount}">Courses (this position's curriculum)</td></tr>` : "";
 
@@ -3662,7 +3665,7 @@ async function buildAndDownloadExcelReport(){
       methodRows = methodRows.filter(r=> r.id.toLowerCase().indexOf(q)>=0 || (r.method.name||"").toLowerCase().indexOf(q)>=0);
     }
     let lastCat = null;
-    const methodRowsHtml = methodRows.map(r=>{
+    const methodRowsHtml = methodRows.map((r, rowIndex)=>{
       const cat = methodCategory(r.id);
       let catRow = "";
       if(cat!==lastCat){ lastCat = cat; catRow = `<tr class="admin-divider"><td colspan="${colCount}">${esc(cat)}</td></tr>`; }
@@ -3682,6 +3685,7 @@ async function buildAndDownloadExcelReport(){
       const staleTitle = r.stale ? (staleOwner ? `Not required for current position — belongs to ${staleOwner}'s curriculum. Kept visible because it's already on record for this person (e.g. from before a rotation/promotion); no re-evaluation reminder applies.` : `Not required for current position — not part of any Olefins-section curriculum. Kept visible because it's already on record for this person; no re-evaluation reminder applies.`) : "";
       return `${catRow}
       <tr${(inactive||r.stale)?' class="row-inactive"':''}>
+        <td class="mono" style="width:44px;text-align:center">${courseItems.length+rowIndex+1}</td>
         <td class="mono" style="font-size:11px">${esc(r.id)}${inactive?' <span class="hint">(inactive)</span>':''}${r.stale?` <span class="hint" title="${esc(staleTitle)}">(not required for current position)</span>`:''}</td>
         <td>${esc(r.method.name||"")}</td>
         ${analyst?`<td>${freqLabel}</td>`:''}
@@ -3759,7 +3763,7 @@ async function buildAndDownloadExcelReport(){
         </div>
         ${ui.importMsg ? `<div class="hint" id="methodsImportMsg" style="white-space:pre-line;padding:8px 12px;margin:0 0 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2, rgba(0,0,0,.03))">${esc(ui.importMsg)}</div>` : ''}
         <div class="gantt-scroll"><table class="people admin-table">
-          <thead><tr><th>Code / Doc No.</th><th>Name</th>${analyst?'<th>Freq.</th>':''}<th>Completed date</th>${analyst?'<th>Next due</th><th>Status</th>':''}<th></th></tr></thead>
+          <thead><tr><th style="width:44px;text-align:center">#</th><th>Code / Doc No.</th><th>Name</th>${analyst?'<th>Freq.</th>':''}<th>Completed date</th>${analyst?'<th>Next due</th><th>Status</th>':''}<th></th></tr></thead>
           <tbody>${bodyRows || `<tr><td colspan="${colCount}" class="empty-state">Nothing matches this filter.</td></tr>`}</tbody>
         </table></div>
       </section>`;
