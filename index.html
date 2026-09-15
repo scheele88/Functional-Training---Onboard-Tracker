@@ -2493,9 +2493,16 @@ function excelPersonRows(person){
 }
 function excelDateCell(cell, iso){
   if(!iso) return;
-  const d = parseISO(iso);
-  if(!d) return;
-  cell.value = d;
+  const match = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!match) return;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const utcDate = Date.UTC(year, month-1, day);
+  const checked = new Date(utcDate);
+  if(checked.getUTCFullYear()!==year || checked.getUTCMonth()!==month-1 || checked.getUTCDate()!==day) return;
+  // Store a date-only Excel serial number so timezone conversion cannot move it to the previous day.
+  cell.value = (utcDate - Date.UTC(1899,11,30)) / 86400000;
   cell.numFmt = "dd/mm/yyyy";
 }
 async function buildAndDownloadExcelReport(){
