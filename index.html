@@ -1619,7 +1619,7 @@ COURSE_DATA.poly_pal = makePolyCourses(POLY_PAL_SOURCE, "poly_pal", 31);
   // column and the Export Report's Newcomers/Rotated scoping, so both always agree with each other.
   // Defaults to an auto-detected value (so nothing needs setting for anyone already in the tracker)
   // but can be hand-overridden per person via person.statusOverride ("" = auto).
-  const PERSON_STATUS_LABELS = { newcomer:"Newcomer", rotation:"Rotation", others:"Others" };
+  const PERSON_STATUS_LABELS = { newcomer:"Newcomer", rotation:"Rotation", others:"Regular staff" };
   const PERSON_STATUS_VALUES = ["newcomer","rotation","others"];
   function autoPersonStatus(person){
     // Rotation takes priority over Newcomer when both would apply (e.g. someone who just rotated
@@ -2173,7 +2173,7 @@ COURSE_DATA.poly_pal = makePolyCourses(POLY_PAL_SOURCE, "poly_pal", 31);
   // Derives each active person's report-relevant figures once (completion %/status/overdue count,
   // computed under whichever progress scope — Probation/Full/Test methods — is currently selected in
   // the header), shared by every scope builder below rather than recomputing per slide. Who counts as
-  // a Newcomer/Rotation/Others (see resolvedPersonStatus) stays probation-based regardless of scope.
+  // a Newcomer/Rotation/Regular staff member (see resolvedPersonStatus) stays probation-based regardless of scope.
   function rptPersonStats(p, scope){
     const pr = personProgressScoped(p, scope);
     const status = pr.overdue>0 ? "overdue" : (pr.pct>=100 ? "complete" : "on_track");
@@ -2313,7 +2313,7 @@ COURSE_DATA.poly_pal = makePolyCourses(POLY_PAL_SOURCE, "poly_pal", 31);
     ]);
     const rowH = 7.02 - rowY, cw = (12.43 - 0.22)/2;
     pbiDonutCard(s, 0.45, rowY, cw, rowH, "Status Composition",
-      ["Newcomer","Rotation","Others"], [statusCounts.newcomer, statusCounts.rotation, statusCounts.others],
+      ["Newcomer","Rotation","Regular staff"], [statusCounts.newcomer, statusCounts.rotation, statusCounts.others],
       [RPT_COLOR.teal, RPT_COLOR.amber, RPT_COLOR.mutedLight], "active");
     const c2x = 0.45+cw+0.22;
     const c2TopY = pbiCard(s, c2x, rowY, cw, rowH, `Avg. Completion by Position (${scopeShort})`);
@@ -2786,7 +2786,7 @@ async function buildAndDownloadExcelReport(){
           ${POSITION_ORDER.map(pk=>`<option value="${pk}" ${dashFilters.position===pk?'selected':''}>${esc(POSITIONS[pk].label)}</option>`).join("")}
         </select>
         <select id="filterFlag" title="Combines course progress and test-method re-evaluation status">
-          <option value="all">All statuses</option>
+          <option value="all">Any training status</option>
           <option value="overdue" ${dashFilters.flag==='overdue'?'selected':''}>Overdue / failed–retrain</option>
           <option value="due" ${dashFilters.flag==='due'?'selected':''}>Due soon / never evaluated</option>
           <option value="ok" ${dashFilters.flag==='ok'?'selected':''}>On track / complete</option>
@@ -2796,11 +2796,11 @@ async function buildAndDownloadExcelReport(){
           <option value="resigned" ${dashFilters.employment==='resigned'?'selected':''}>Left / resigned${resignedCount?` (${resignedCount})`:''}</option>
           <option value="all" ${dashFilters.employment==='all'?'selected':''}>Everyone</option>
         </select>
-        <select id="filterPersonStatus" title="Newcomer/Rotation/Others — same classification used to scope the Export Report">
-          <option value="all" ${dashFilters.personStatus==='all'?'selected':''}>Any status</option>
+        <select id="filterPersonStatus" title="Staff category — Newcomer, Rotation, or Regular staff; also used to scope the Export Report">
+          <option value="all" ${dashFilters.personStatus==='all'?'selected':''}>Any staff category</option>
           <option value="newcomer" ${dashFilters.personStatus==='newcomer'?'selected':''}>Newcomer</option>
           <option value="rotation" ${dashFilters.personStatus==='rotation'?'selected':''}>Rotation</option>
-          <option value="others" ${dashFilters.personStatus==='others'?'selected':''}>Others</option>
+          <option value="others" ${dashFilters.personStatus==='others'?'selected':''}>Regular staff</option>
         </select>
         ${nonDefault ? `<button class="btn small" id="clearFilters">Clear filters</button>` : ''}
       </div>
@@ -3693,7 +3693,7 @@ async function buildAndDownloadExcelReport(){
             <option value="" ${person.statusOverride?'':'selected'}>Auto-detect</option>
             <option value="newcomer" ${person.statusOverride==='newcomer'?'selected':''}>Newcomer</option>
             <option value="rotation" ${person.statusOverride==='rotation'?'selected':''}>Rotation</option>
-            <option value="others" ${person.statusOverride==='others'?'selected':''}>Others</option>
+            <option value="others" ${person.statusOverride==='others'?'selected':''}>Regular staff</option>
           </select>
           <span class="hint">${person.statusOverride ? `Manually set — ` : `Resolves to — `}<strong>${esc(PERSON_STATUS_LABELS[resolvedPersonStatus(person)])}</strong>${resolvedPersonStatus(person)==='rotation' ? (rotationFromTo(person) ? ` (${esc(rotationFromTo(person))})` : ` (manually flagged — no Position History on file)`) : ''}${person.statusOverride ? ` · used as-is in the Export Report` : ` · auto-detected from Position History / Probation %, used in the Export Report`}</span>
         </div>
